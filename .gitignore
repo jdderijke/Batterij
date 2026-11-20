@@ -1,0 +1,10 @@
+# Virtuele omgeving en Python-tussenbestanden
+.venv/
+__pycache__/
+.pytest_cache/
+
+# Opgehaalde weer- en prijsdata: altijd opnieuw op te halen
+data/
+
+# Eigen instellingen van de gebruiker (worden door de app bijgehouden)
+instellingen.json

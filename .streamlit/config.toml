@@ -1,0 +1,8 @@
+# Instellingen van Streamlit voor deze app.
+
+[server]
+# Grootste bestand (in MB) dat bij "Instellingen laden" mag worden aangeboden.
+# Streamlit staat standaard 200 MB toe en zet die grens ook op het scherm. Een
+# bestand met instellingen is een paar kB; 1 MB is de kleinste waarde die
+# Streamlit aanneemt, en geeft op het scherm een grens die bij het doel past.
+maxUploadSize = 1
