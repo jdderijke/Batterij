@@ -1303,19 +1303,38 @@ def main() -> None:
             "Instellingen laden",
             type="json",
             help="Leest een eerder bewaard bestand met instellingen in. Alle velden krijgen de waarden uit dat bestand.",
+            # Het volgnummer in de sleutel gaat na elke geslaagde lading
+            # omhoog; zie hieronder.
+            key=f"laadveld_{st.session_state.setdefault('laadbeurt', 0)}",
         )
         if bestand is not None:
-            # Hetzelfde bestand blijft in het veld staan; het wordt maar één
-            # keer verwerkt.
-            kenmerk = f"{bestand.name}:{bestand.size}"
-            if st.session_state.get("geladen") != kenmerk:
-                try:
-                    st.session_state["cfg"] = Config.uit_dict(json.loads(bestand.getvalue().decode("utf-8")))
-                    st.session_state["geladen"] = kenmerk
-                    st.session_state["generatie"] += 1
-                    st.rerun()
-                except (ValueError, TypeError, KeyError) as fout:
-                    st.error(f"Dit bestand is niet te lezen: {fout}")
+            # Een aangeboden bestand wordt altijd geladen, en daarna is het
+            # veld weer leeg: het krijgt een nieuwe sleutel en Streamlit
+            # begint er dan opnieuw mee. Zo kan hetzelfde bestand zo vaak
+            # geladen worden als nodig, en staat er nooit een bestandsnaam in
+            # het veld die niet (meer) bij de instellingen op het scherm hoort.
+            #
+            # Afgewezen: het bestand in het veld laten staan en met een
+            # kenmerk (naam plus grootte) bijhouden of het al verwerkt is; zo
+            # was het. Twee varianten die alleen in een getal verschillen
+            # (15.0 tegenover 20.0 kWh) zijn even groot en heten na
+            # "Instellingen bewaren" hetzelfde: de tweede werd stilzwijgend
+            # overgeslagen. Hetzelfde gebeurde bij opnieuw laden na
+            # "Standaardinstellingen". Het leek dan alsof er instellingen
+            # verloren gingen, terwijl het bestand gewoon niet geladen was.
+            try:
+                st.session_state["cfg"] = Config.uit_dict(json.loads(bestand.getvalue().decode("utf-8")))
+            except (ValueError, TypeError, KeyError) as fout:
+                # Het onleesbare bestand blijft staan, met de melding erbij,
+                # tot de gebruiker het weghaalt of een ander bestand kiest.
+                st.error(f"Dit bestand is niet te lezen: {fout}")
+            else:
+                st.session_state["laadbeurt"] += 1
+                st.session_state["generatie"] += 1
+                # De bevestiging komt in de volgende run op het scherm; wat
+                # hier getoond wordt, verdwijnt met de herstart.
+                st.session_state["melding"] = f"Instellingen geladen uit {bestand.name}."
+                st.rerun()
         if st.button(
             "Standaardinstellingen",
             width="stretch",
@@ -1324,7 +1343,12 @@ def main() -> None:
         ):
             st.session_state["cfg"] = Config()
             st.session_state["generatie"] += 1
+            st.session_state["melding"] = "Alle velden staan weer op de standaardinstellingen."
             st.rerun()
+        # Bevestiging van laden of terugzetten, één keer. Zonder bevestiging
+        # is niet te zien of een geladen bestand ook echt verwerkt is.
+        if "melding" in st.session_state:
+            st.success(st.session_state.pop("melding"))
 
     tabs = st.tabs(["Instellingen", "Overzicht", "Tijdverloop", "Fasen en load balancing", "Warmtepomp", "Scenario's"])
     with tabs[0]:
