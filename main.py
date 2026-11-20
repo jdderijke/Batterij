@@ -46,6 +46,10 @@ from batsim.paden import gebruikersmap, is_programma
 BRON = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 APP = BRON / "app.py"
 
+# Naam van de omgevingsvariabele waarmee het Windows-programma start zonder de
+# browser te openen; zie ``_opties_programma``.
+GEEN_BROWSER = "BATTERIJ_GEEN_BROWSER"
+
 
 def _vrije_poort(eerste: int = 8501, pogingen: int = 50) -> int:
     """Zoekt de eerste vrije poort vanaf ``eerste``.
@@ -116,8 +120,16 @@ def _opties_programma() -> list[str]:
       vanaf de computer van iemand die daar niet om gevraagd heeft.
     """
     poort = _vrije_poort()
-    threading.Thread(target=_open_browser_als_klaar, args=(poort,), daemon=True).start()
-    print("Batterijsimulatie start; de browser opent zo vanzelf.")
+    # Bij het testen van een nieuwe build mag de browser van de gebruiker niet
+    # openspringen: dat verstoort een sessie die al openstaat. Wie de
+    # omgevingsvariabele BATTERIJ_GEEN_BROWSER zet, krijgt alleen de server en
+    # opent het adres zelf (een test doet dat met een eigen, onzichtbare
+    # browser). Voor gewoon gebruik verandert er niets.
+    if os.environ.get(GEEN_BROWSER):
+        print("Batterijsimulatie start zonder de browser te openen (BATTERIJ_GEEN_BROWSER).")
+    else:
+        threading.Thread(target=_open_browser_als_klaar, args=(poort,), daemon=True).start()
+        print("Batterijsimulatie start; de browser opent zo vanzelf.")
     print(f"Adres: http://localhost:{poort}")
     print(f"Instellingen en opgehaalde data staan in: {gebruikersmap()}")
     print("Sluit dit venster om de app te stoppen.")

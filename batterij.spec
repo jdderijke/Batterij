@@ -65,6 +65,9 @@ a = Analysis(
         *st_imports,
         # Wat app.py importeert; zie punt 1 hierboven.
         "uitleg",
+        "bestandskeuze",
+        # De vensters "Openen" en "Opslaan als" van Windows (bestandskeuze.py).
+        "ctypes.wintypes",
         "batsim",
         "batsim.config",
         "batsim.data",

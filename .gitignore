@@ -18,3 +18,4 @@ data/
 
 # Eigen instellingen van de gebruiker (worden door de app bijgehouden)
 instellingen.json
+huidig_bestand.txt

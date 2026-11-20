@@ -1,8 +1,11 @@
 # Instellingen van Streamlit voor deze app.
-
-[server]
-# Grootste bestand (in MB) dat bij "Instellingen laden" mag worden aangeboden.
-# Streamlit staat standaard 200 MB toe en zet die grens ook op het scherm. Een
-# bestand met instellingen is een paar kB; 1 MB is de kleinste waarde die
-# Streamlit aanneemt, en geeft op het scherm een grens die bij het doel past.
-maxUploadSize = 1
+#
+# Op dit moment zijn er geen: de app gebruikt de standaardwaarden van
+# Streamlit. Het bestand blijft bestaan omdat main.py en batterij.spec het
+# verwachten; een instelling die voor script én Windows-programma moet gelden,
+# hoort hier.
+#
+# Vervallen: [server] maxUploadSize = 1. Die begrensde het bestand bij
+# "Instellingen laden" toen dat nog een upload via de browser was. Laden gaat
+# nu via het venster van Windows (zie bestandskeuze.py) en er wordt niets meer
+# geüpload.

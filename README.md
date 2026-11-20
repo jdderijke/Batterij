@@ -115,12 +115,20 @@ heeft. Weet je een waarde niet, laat dan de standaardwaarde staan.
 | Tijdstap | Hoe fijn er gerekend wordt. Kleiner is nauwkeuriger (vooral voor pieken per fase) maar langzamer. 5 minuten is een goed begin. |
 | Toevalsreeks | Bepaalt op welke momenten apparaten en auto toevallig aan- en afschakelen. Hetzelfde getal geeft steeds dezelfde uitkomst. |
 | Simulatie starten | Rekent het jaar opnieuw door. Doe dit na elke wijziging. |
-| Instellingen bewaren | Slaat alle instellingen op als bestand, bijvoorbeeld om een variant te bewaren. |
-| Instellingen laden | Leest een eerder bewaard bestand weer in. |
-| Standaardinstellingen | Zet alles terug op de standaardwaarden. Bewaar je eigen invoer eerst als je die wilt houden. |
+| Instellingen laden… | Opent een eerder opgeslagen bestand met instellingen. Alle velden krijgen de waarden uit dat bestand. |
+| Instellingen opslaan | Schrijft de instellingen terug in het bestand waaruit je ze geladen hebt. Is er nog geen bestand, dan vraagt de app waar het moet komen. |
+| Opslaan als… | Slaat de instellingen op in een ander bestand, bijvoorbeeld om een variant te bewaren. Daarna schrijft **Instellingen opslaan** in dat bestand. |
+| Standaardinstellingen | Zet alles terug op de standaardwaarden en laat het bestand los. Sla je eigen invoer eerst op als je die wilt houden; het bestand zelf blijft ongemoeid. |
 
-De laatst gebruikte instellingen onthoudt de app vanzelf; bewaren is alleen
-nodig om meerdere varianten naast elkaar te houden.
+Boven de knoppen staat met welk bestand je werkt en of er sinds het opslaan
+iets gewijzigd is. Laden en opslaan gaan via de gewone vensters van Windows,
+die over de browser heen openen; je kiest zelf de map en de naam. De app
+onthoudt het bestand, ook na opnieuw starten.
+
+De laatst gebruikte instellingen onthoudt de app ook zonder dat je opslaat;
+opslaan is alleen nodig om varianten naast elkaar te houden of door te geven.
+De invoer op het tabblad Scenario's hoort niet bij de instellingen en wordt
+niet opgeslagen.
 
 ### Instellingen
 
@@ -265,6 +273,7 @@ Opbouw van de code:
 | `main.py` | Startpunt, als script en als Windows-programma. |
 | `app.py` | De Streamlit-app: invoervelden, grafieken en tabellen. |
 | `uitleg.py` | De teksten achter de vraagtekens. |
+| `bestandskeuze.py` | De Windows-vensters "Openen" en "Opslaan als". |
 | `batsim/config.py` | Alle instellingen, met standaardwaarden. |
 | `batsim/data.py` | Weer en prijzen ophalen en lokaal bewaren. |
 | `batsim/zon.py` | Zonopbrengst uit KNMI-straling. |

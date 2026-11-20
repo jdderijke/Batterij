@@ -29,8 +29,8 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
-import json
 import math
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -58,11 +58,17 @@ from batsim.paden import gebruikersmap
 from batsim.resultaat import in_bezit, investering, vergelijk
 from batsim.scenario import vergelijk_scenarios
 from batsim.simulatie import Uitkomst, netspanning_straat, voer_uit, zonder_batterij
+from bestandskeuze import kies_om_op_te_slaan, kies_om_te_openen
 from uitleg import bij_uitkomst, bij_veld
 
 # De laatst gebruikte instellingen. Als script in de projectmap, als
 # Windows-programma in de eigen map van de gebruiker (zie ``batsim/paden.py``).
 INSTELLINGEN_PAD = gebruikersmap() / "instellingen.json"
+# Het pad van het instellingenbestand waarmee het laatst gewerkt is (laden of
+# opslaan), zodat "Instellingen opslaan" dat na een herstart nog weet. Een los
+# bestandje en geen veld in ``instellingen.json``: dat bestand is een Config en
+# moet ook als zodanig te laden blijven.
+HUIDIG_BESTAND_PAD = gebruikersmap() / "huidig_bestand.txt"
 
 # Naam van de uitgerekende kolom in de apparatentabel. Geen veld van
 # ``Apparaat``: de kolom wordt alleen getoond en nooit bewaard.
@@ -1249,6 +1255,82 @@ def toon_scenarios(cfg: Config, weer: pd.DataFrame, prijzen: pd.DataFrame) -> No
 # ---------------------------------------------------------------------------
 
 
+def _onthoud_bestand(pad: Path | None, inhoud: str | None) -> None:
+    """Legt vast met welk instellingenbestand de app werkt, ook voor de volgende start.
+
+    Args:
+        pad: het bestand, of ``None`` om het los te laten.
+        inhoud: de instellingen zoals ze in dat bestand staan (JSON). Daarmee
+            ziet de app of er sindsdien iets gewijzigd is.
+    """
+    st.session_state["bestand"] = None if pad is None else str(pad)
+    st.session_state["opgeslagen_json"] = inhoud
+    try:
+        if pad is None:
+            HUIDIG_BESTAND_PAD.unlink(missing_ok=True)
+        else:
+            HUIDIG_BESTAND_PAD.write_text(str(pad), encoding="utf-8")
+    except OSError:
+        # Niet kunnen onthouden is geen reden om het laden of opslaan zelf te
+        # laten mislukken; na een herstart vraagt de app dan opnieuw.
+        pass
+
+
+def _kies(venster) -> Path | None:
+    """Toont een van de vensters uit ``bestandskeuze`` en geeft het gekozen pad.
+
+    Het venster opent in de map van het huidige bestand, of anders in
+    Documenten. Kan het venster niet getoond worden, dan komt dat als melding
+    op het scherm en is het antwoord ``None``, net als bij annuleren.
+    """
+    huidig = st.session_state.get("bestand")
+    documenten = Path.home() / "Documents"
+    beginmap = Path(huidig).parent if huidig else (documenten if documenten.is_dir() else None)
+    try:
+        return venster(beginmap)
+    except (NotImplementedError, OSError) as fout:
+        st.session_state["foutmelding"] = f"Het venster om een bestand te kiezen kon niet worden geopend: {fout}"
+        return None
+
+
+def _laad_uit(pad: Path) -> bool:
+    """Leest de instellingen uit ``pad`` en maakt dat het huidige bestand.
+
+    Returns:
+        ``True`` als het gelukt is. Bij een onleesbaar bestand blijft alles
+        zoals het was en staat er een foutmelding klaar.
+    """
+    try:
+        nieuw = Config.laad(pad)
+    except (OSError, ValueError, TypeError, KeyError) as fout:
+        st.session_state["foutmelding"] = f"{pad.name} is niet te lezen: {fout}"
+        return False
+    st.session_state["cfg"] = nieuw
+    # Een nieuwe generatie: alle invoervelden beginnen opnieuw, met de geladen
+    # waarden (zie de uitleg bovenaan dit bestand).
+    st.session_state["generatie"] += 1
+    _onthoud_bestand(pad, nieuw.naar_json())
+    st.session_state["melding"] = f"Instellingen geladen uit {pad.name}."
+    return True
+
+
+def _bewaar_in(cfg: Config, pad: Path) -> bool:
+    """Schrijft de instellingen naar ``pad`` en maakt dat het huidige bestand.
+
+    Returns:
+        ``True`` als het gelukt is; anders staat er een foutmelding klaar
+        (bijvoorbeeld bij een map waarin niet geschreven mag worden).
+    """
+    try:
+        cfg.bewaar(pad)
+    except OSError as fout:
+        st.session_state["foutmelding"] = f"Opslaan in {pad.name} is niet gelukt: {fout}"
+        return False
+    _onthoud_bestand(pad, cfg.naar_json())
+    st.session_state["melding"] = f"Instellingen opgeslagen in {pad.name}."
+    return True
+
+
 def main() -> None:
     """Bouwt de pagina op: zijbalk, instellingen en de tabbladen met resultaten."""
     st.set_page_config(page_title="Batterijsimulatie", page_icon="🔋", layout="wide")
@@ -1261,6 +1343,18 @@ def main() -> None:
         except (ValueError, TypeError, KeyError):
             # Een beschadigd bestand mag de app niet tegenhouden.
             st.session_state["cfg"] = Config()
+        # Ook het bestand waarmee het laatst gewerkt is terughalen, zodat
+        # "Instellingen opslaan" na een herstart (of F5 in de browser) nog
+        # weet waarheen. Is het bestand intussen verdwenen of onleesbaar, dan
+        # begint de app zonder bestand.
+        st.session_state["bestand"] = None
+        st.session_state["opgeslagen_json"] = None
+        try:
+            vorig = Path(HUIDIG_BESTAND_PAD.read_text(encoding="utf-8").strip())
+            st.session_state["opgeslagen_json"] = Config.laad(vorig).naar_json()
+            st.session_state["bestand"] = str(vorig)
+        except (OSError, ValueError, TypeError, KeyError):
+            pass
     # De instelling wordt elke run opnieuw opgebouwd uit haar eigen inhoud.
     # Reden: na een wijziging in de code herlaadt Streamlit de modules, maar
     # een open browsertabblad houdt zijn oude Config-object vast. Dat object
@@ -1290,65 +1384,56 @@ def main() -> None:
         )
 
         st.divider()
-        st.download_button(
-            "Instellingen bewaren",
-            cfg.naar_json(),
-            "batterij-instellingen.json",
-            "application/json",
+        # Laden en opslaan gaan via de vensters van Windows en werken op een
+        # echt bestand op schijf (zie ``bestandskeuze.py`` voor het waarom).
+        # De app onthoudt welk bestand dat is: "Instellingen opslaan" schrijft
+        # daar weer in, "Opslaan als…" kiest een ander.
+        #
+        # Afgewezen: uploaden en downloaden via de browser (zo was het). Een
+        # browser geeft geen pad door, dus opslaan in hetzelfde bestand kon
+        # niet; elke keer bewaren gaf een nieuw bestand in Downloads.
+        #
+        # De regel met de bestandsnaam en de meldingen krijgen hier alleen hun
+        # plek; ze worden verderop gevuld, na het tabblad Instellingen. Pas dan
+        # staat in ``cfg`` wat er in deze run in de velden is ingevuld.
+        bestandsregel = st.empty()
+        laden = st.button(
+            "Instellingen laden…",
             width="stretch",
-            help="Slaat alle instellingen op als bestand op je computer, bijvoorbeeld om een variant te bewaren. "
+            help="Opent een eerder opgeslagen bestand met instellingen. Alle velden krijgen de waarden uit dat bestand. "
+            "Het venster om het bestand te kiezen opent over de browser heen.",
+        )
+        opslaan = st.button(
+            "Instellingen opslaan",
+            width="stretch",
+            help="Schrijft alle instellingen terug in het bestand waaruit je ze geladen hebt (of waarin je ze het laatst "
+            "hebt opgeslagen). Is er nog geen bestand, dan vraagt de app waar het moet komen. "
             "De laatst gebruikte instellingen onthoudt de app ook zonder dat je dit doet.",
         )
-        bestand = st.file_uploader(
-            "Instellingen laden",
-            type="json",
-            help="Leest een eerder bewaard bestand met instellingen in. Alle velden krijgen de waarden uit dat bestand.",
-            # Het volgnummer in de sleutel gaat na elke geslaagde lading
-            # omhoog; zie hieronder.
-            key=f"laadveld_{st.session_state.setdefault('laadbeurt', 0)}",
+        opslaan_als = st.button(
+            "Opslaan als…",
+            width="stretch",
+            help="Slaat alle instellingen op in een ander bestand, bijvoorbeeld om een variant te bewaren. "
+            "Daarna is dat het bestand waarin 'Instellingen opslaan' schrijft.",
         )
-        if bestand is not None:
-            # Een aangeboden bestand wordt altijd geladen, en daarna is het
-            # veld weer leeg: het krijgt een nieuwe sleutel en Streamlit
-            # begint er dan opnieuw mee. Zo kan hetzelfde bestand zo vaak
-            # geladen worden als nodig, en staat er nooit een bestandsnaam in
-            # het veld die niet (meer) bij de instellingen op het scherm hoort.
-            #
-            # Afgewezen: het bestand in het veld laten staan en met een
-            # kenmerk (naam plus grootte) bijhouden of het al verwerkt is; zo
-            # was het. Twee varianten die alleen in een getal verschillen
-            # (15.0 tegenover 20.0 kWh) zijn even groot en heten na
-            # "Instellingen bewaren" hetzelfde: de tweede werd stilzwijgend
-            # overgeslagen. Hetzelfde gebeurde bij opnieuw laden na
-            # "Standaardinstellingen". Het leek dan alsof er instellingen
-            # verloren gingen, terwijl het bestand gewoon niet geladen was.
-            try:
-                st.session_state["cfg"] = Config.uit_dict(json.loads(bestand.getvalue().decode("utf-8")))
-            except (ValueError, TypeError, KeyError) as fout:
-                # Het onleesbare bestand blijft staan, met de melding erbij,
-                # tot de gebruiker het weghaalt of een ander bestand kiest.
-                st.error(f"Dit bestand is niet te lezen: {fout}")
-            else:
-                st.session_state["laadbeurt"] += 1
-                st.session_state["generatie"] += 1
-                # De bevestiging komt in de volgende run op het scherm; wat
-                # hier getoond wordt, verdwijnt met de herstart.
-                st.session_state["melding"] = f"Instellingen geladen uit {bestand.name}."
+        if laden:
+            pad = _kies(kies_om_te_openen)
+            if pad is not None and _laad_uit(pad):
                 st.rerun()
         if st.button(
             "Standaardinstellingen",
             width="stretch",
             help="Zet alle velden terug op de standaardwaarden van de app. Je eigen invoer gaat daarbij verloren, "
-            "tenzij je die eerst hebt bewaard.",
+            "tenzij je die eerst hebt opgeslagen. Het bestand zelf blijft ongemoeid.",
         ):
             st.session_state["cfg"] = Config()
             st.session_state["generatie"] += 1
+            # Het bestand loslaten: anders zou "Instellingen opslaan" de
+            # standaardwaarden zonder vragen over een bewaarde variant schrijven.
+            _onthoud_bestand(None, None)
             st.session_state["melding"] = "Alle velden staan weer op de standaardinstellingen."
             st.rerun()
-        # Bevestiging van laden of terugzetten, één keer. Zonder bevestiging
-        # is niet te zien of een geladen bestand ook echt verwerkt is.
-        if "melding" in st.session_state:
-            st.success(st.session_state.pop("melding"))
+        meldingsplek = st.empty()
 
     tabs = st.tabs(["Instellingen", "Overzicht", "Tijdverloop", "Fasen en load balancing", "Warmtepomp", "Scenario's"])
     with tabs[0]:
@@ -1366,6 +1451,35 @@ def main() -> None:
     if st.session_state.get("bewaard_json") != nu_json:
         cfg.bewaar(INSTELLINGEN_PAD)
         st.session_state["bewaard_json"] = nu_json
+
+    # Opslaan gebeurt hier en niet bij de knoppen in de zijbalk: wie een getal
+    # intypt en meteen op "Instellingen opslaan" klikt, stuurt beide in dezelfde
+    # run, en de zijbalk komt vóór de invoervelden aan de beurt. Daar zou de
+    # oude waarde in het bestand komen.
+    if opslaan or opslaan_als:
+        huidig = st.session_state.get("bestand")
+        # Zonder bestand is "opslaan" hetzelfde als "opslaan als".
+        pad = Path(huidig) if (opslaan and huidig) else _kies(kies_om_op_te_slaan)
+        if pad is not None:
+            _bewaar_in(cfg, pad)
+
+    # De regel met het bestand en de bevestiging of foutmelding, op de plekken
+    # die de zijbalk ervoor heeft vrijgehouden.
+    huidig = st.session_state.get("bestand")
+    if huidig:
+        gewijzigd = st.session_state.get("opgeslagen_json") != nu_json
+        bestandsregel.caption(
+            f"Bestand: **{Path(huidig).name}**" + (" · gewijzigd, nog niet opgeslagen" if gewijzigd else " · opgeslagen"),
+            help=huidig,
+        )
+    else:
+        bestandsregel.caption("Nog geen bestand. De app onthoudt wel je laatste invoer.")
+    # Eén keer tonen. Zonder bevestiging is niet te zien of laden of opslaan
+    # ook echt gebeurd is.
+    if "foutmelding" in st.session_state:
+        meldingsplek.error(st.session_state.pop("foutmelding"))
+    elif "melding" in st.session_state:
+        meldingsplek.success(st.session_state.pop("melding"))
 
     try:
         with st.spinner("Weer en prijzen ophalen…"):
