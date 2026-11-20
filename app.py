@@ -31,7 +31,6 @@ import dataclasses
 import datetime as dt
 import json
 import math
-from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -54,12 +53,15 @@ from batsim.config import (
 )
 from batsim.data import laad_prijzen, laad_weer
 from batsim.huis import warmteverlies_w_per_k
+from batsim.paden import gebruikersmap
 from batsim.resultaat import in_bezit, investering, vergelijk
 from batsim.scenario import vergelijk_scenarios
 from batsim.simulatie import Uitkomst, netspanning_straat, voer_uit, zonder_batterij
 from uitleg import bij_uitkomst, bij_veld
 
-INSTELLINGEN_PAD = Path(__file__).resolve().parent / "instellingen.json"
+# De laatst gebruikte instellingen. Als script in de projectmap, als
+# Windows-programma in de eigen map van de gebruiker (zie ``batsim/paden.py``).
+INSTELLINGEN_PAD = gebruikersmap() / "instellingen.json"
 
 # Kleuren volgen het onderdeel, niet de volgorde in een grafiek: de zon is in
 # elke grafiek geel en de batterij overal paars. De waarden komen uit een

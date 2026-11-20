@@ -22,9 +22,12 @@ import numpy as np
 import pandas as pd
 import requests
 
-# De map met opgehaalde data staat naast het pakket en blijft buiten git: ze is
-# altijd opnieuw op te halen.
-DATA_MAP = Path(__file__).resolve().parent.parent / "data"
+from .paden import gebruikersmap
+
+# De map met opgehaalde data blijft buiten git: ze is altijd opnieuw op te
+# halen. Als script staat ze in de projectmap, als Windows-programma in de
+# eigen map van de gebruiker (zie ``paden.py``).
+DATA_MAP = gebruikersmap() / "data"
 
 KNMI_URL = "https://www.daggegevens.knmi.nl/klimatologie/uurgegevens"
 PRIJS_URL = "https://api.energy-charts.info/price"

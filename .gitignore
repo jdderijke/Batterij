@@ -3,6 +3,19 @@
 __pycache__/
 .pytest_cache/
 
+# Het gebouwde Windows-programma (pyinstaller batterij.spec): altijd opnieuw te bouwen
+build/
+dist/*
+# Uitzondering: de zip achter de downloadknop in README.md staat wel in git,
+# zodat de knop zonder aparte uploadstap werkt. Na elke nieuwe build opnieuw
+# maken en committen (zie README.md, "Voor ontwikkelaars"). Daarom hierboven
+# ``dist/*`` en niet ``dist/``: van een map die als geheel genegeerd is, kan
+# git geen los bestand meer uitzonderen.
+!dist/Batterij.zip
+
+# Crashverslag van Git Bash: zegt niets over dit project
+bash.exe.stackdump
+
 # Opgehaalde weer- en prijsdata: altijd opnieuw op te halen
 data/
 
