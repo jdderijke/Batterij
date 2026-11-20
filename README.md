@@ -6,6 +6,13 @@ weer en de echte stroomprijzen van een jaar uit het verleden. Het antwoord op
 de vraag: **loont een batterij bij mij, en welke dan?**
 
 [![Download voor Windows 10 en 11](https://img.shields.io/badge/Download-Windows%2010%20en%2011-0078D4?style=for-the-badge)](https://github.com/jdderijke/Batterij/releases/latest/download/Batterij.zip)
+[![Nieuwste versie](https://img.shields.io/github/v/release/jdderijke/Batterij?label=versie&style=for-the-badge)](https://github.com/jdderijke/Batterij/releases/latest)
+[![Licentie: MIT](https://img.shields.io/badge/licentie-MIT-green?style=for-the-badge)](LICENSE)
+
+De knop geeft altijd de nieuwste versie; het versienummer hiernaast volgt
+vanzelf de laatste [release](https://github.com/jdderijke/Batterij/releases),
+waar ook staat wat er per versie veranderd is. In de app staat het
+versienummer linksboven in de zijbalk.
 
 *Batterij.zip, ongeveer 90 MB. Python installeren is niet nodig. Zie
 [Installeren op Windows](#installeren-op-windows).*
@@ -18,6 +25,7 @@ de vraag: **loont een batterij bij mij, en welke dan?**
 - [Installeren op Windows](#installeren-op-windows)
 - [Handleiding](#handleiding)
 - [Voor ontwikkelaars](#voor-ontwikkelaars)
+- [Licentie](#licentie)
 
 ## Wat de simulatie doet
 
@@ -284,3 +292,9 @@ Opbouw van de code:
 | `batsim/resultaat.py` | Kentallen en kosten uit een simulatie. |
 | `batsim/scenario.py` | Meerdere varianten naast elkaar doorrekenen. |
 | `batsim/paden.py` | Waar de app haar eigen bestanden bewaart. |
+
+## Licentie
+
+[MIT](LICENSE): je mag de code en het programma vrij gebruiken, aanpassen en
+doorgeven, ook zakelijk, zolang de licentietekst erbij blijft. Er is geen
+garantie; de uitkomsten zijn een berekening en geen advies.
