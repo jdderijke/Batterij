@@ -1,3 +1,8 @@
+# Instellingen van PyCharm: persoonlijk en per computer verschillend
+# (vensterindeling, pad naar de Python-omgeving). PyCharm maakt de map
+# vanzelf opnieuw aan bij het openen van het project.
+.idea/
+
 # Virtuele omgeving en Python-tussenbestanden
 .venv/
 __pycache__/
