@@ -51,6 +51,7 @@ from batsim.config import (
     Config,
     ZonneVeld,
 )
+from batsim.belasting import UREN_PER_JAAR, apparaat_kwh_per_jaar, basislast_kwh_per_jaar
 from batsim.data import laad_prijzen, laad_weer
 from batsim.huis import warmteverlies_w_per_k
 from batsim.paden import gebruikersmap
@@ -62,6 +63,10 @@ from uitleg import bij_uitkomst, bij_veld
 # De laatst gebruikte instellingen. Als script in de projectmap, als
 # Windows-programma in de eigen map van de gebruiker (zie ``batsim/paden.py``).
 INSTELLINGEN_PAD = gebruikersmap() / "instellingen.json"
+
+# Naam van de uitgerekende kolom in de apparatentabel. Geen veld van
+# ``Apparaat``: de kolom wordt alleen getoond en nooit bewaard.
+KWH_KOLOM = "kwh_per_jaar"
 
 # Kleuren volgen het onderdeel, niet de volgorde in een grafiek: de zon is in
 # elke grafiek geel en de batterij overal paars. De waarden komen uit een
@@ -205,26 +210,79 @@ def _uit_tabel(klasse, tabel: pd.DataFrame) -> list:
     return items
 
 
-def lijst_editor(naam: str, klasse, items: list, kolommen: dict) -> list:
+def _begintabel(klasse, items: list, afgeleid: dict) -> pd.DataFrame:
+    """Bouwt de tabel waarmee de editor begint, met de afgeleide kolommen erbij.
+
+    Een lege lijst geeft een lege tabel die wel alle kolommen heeft; anders
+    weet de editor niet welke velden een nieuwe rij moet krijgen.
+    """
+    tabel = _naar_tabel(items) if items else _naar_tabel([klasse()]).iloc[0:0].copy()
+    for kolom, bereken in afgeleid.items():
+        tabel[kolom] = [bereken(item) for item in items]
+    return tabel
+
+
+def lijst_editor(naam: str, klasse, items: list, kolommen: dict, afgeleid: dict | None = None) -> list:
     """Toont een bewerkbare tabel (rijen toevoegen en verwijderen kan) voor een lijst.
 
     De editor krijgt bij elke run dezelfde begintabel en houdt zelf de
     wijzigingen bij. Zou hij zijn eigen uitvoer als nieuwe invoer krijgen, dan
     werden wijzigingen dubbel toegepast.
+
+    Args:
+        naam: naam van de lijst; maakt de sleutels in de sessie uniek.
+        klasse: de dataclass van één rij.
+        items: de huidige inhoud van de lijst.
+        kolommen: opmaak en uitleg per kolom.
+        afgeleid: extra kolommen die uit de rij worden uitgerekend en niet in
+            de dataclass staan, als ``{kolomnaam: functie(item)}``. De kolom
+            hoort in ``kolommen`` op alleen-lezen te staan.
+
+    Afgeleide kolommen:
+        Een uitgerekende kolom moet meeveranderen als de rij verandert, en de
+        editor rekent zelf niets uit. Daarom begint de editor na elke
+        wijziging opnieuw: de bewerkte tabel wordt, met vers uitgerekende
+        kolommen, de nieuwe begintabel, en de editor krijgt een nieuwe sleutel
+        (de "ronde") zodat hij zijn bijgehouden wijzigingen vergeet in plaats
+        van ze nog een keer toe te passen. Prijs: na een wijziging is de
+        geselecteerde cel haar selectie kwijt. Zonder afgeleide kolommen
+        gebeurt dit niet en werkt de editor als voorheen; daarom staat het
+        alleen aan waar het nodig is.
+
+        Afgewezen: de uitgerekende waarden in een tweede, losse tabel ernaast
+        tonen. Dat houdt de selectie heel, maar de getallen staan dan niet op
+        de rij waar ze bij horen, en bij sorteren lopen de twee tabellen uit
+        elkaar.
     """
+    afgeleid = afgeleid or {}
     generatie = st.session_state["generatie"]
     begin = f"begin_{naam}_{generatie}"
+    ronde = f"ronde_{naam}_{generatie}"
+    st.session_state.setdefault(ronde, 0)
     if begin not in st.session_state:
-        st.session_state[begin] = _naar_tabel(items) if items else _naar_tabel([klasse()]).iloc[0:0]
+        # Met afgeleide kolommen eerst één keer heen en terug door
+        # ``_uit_tabel``: die zet elke waarde in het type van het veld (2000
+        # wordt 2000.0). Zonder dat verschilt de eerste begintabel alleen in
+        # type van de vergelijking hieronder, en begon de editor meteen een
+        # keer voor niets opnieuw.
+        eerste = _uit_tabel(klasse, _naar_tabel(items)) if afgeleid else items
+        st.session_state[begin] = _begintabel(klasse, eerste, afgeleid)
     bewerkt = st.data_editor(
         st.session_state[begin],
         num_rows="dynamic",
         column_config=kolommen,
         hide_index=True,
         width="stretch",
-        key=f"editor_{naam}_{generatie}",
+        key=f"editor_{naam}_{generatie}_{st.session_state[ronde]}",
     )
-    return _uit_tabel(klasse, bewerkt)
+    nieuw = _uit_tabel(klasse, bewerkt)
+    if afgeleid:
+        vers = _begintabel(klasse, nieuw, afgeleid)
+        if not vers.equals(st.session_state[begin]):
+            st.session_state[begin] = vers
+            st.session_state[ronde] += 1
+            st.rerun()
+    return nieuw
 
 
 @st.cache_data(show_spinner=False)
@@ -517,6 +575,13 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
                 key=f"w{st.session_state['generatie']}.basislast.{fase}",
                 help=bij_veld("Huishouden.basislast_w"),
             )
+        # Watt zegt weinig; kWh per jaar is te vergelijken met de jaarafrekening.
+        basis_kwh = basislast_kwh_per_jaar(hh)
+        st.caption(
+            f"Samen {nl(sum(hh.basislast_w))} W, dag en nacht: **{nl(basis_kwh)} kWh per jaar** "
+            f"(L1 {nl(hh.basislast_w[0] * UREN_PER_JAAR / 1000)}, L2 {nl(hh.basislast_w[1] * UREN_PER_JAAR / 1000)}, "
+            f"L3 {nl(hh.basislast_w[2] * UREN_PER_JAAR / 1000)} kWh)."
+        )
         st.markdown("**Apparaten** (starten op een toevallig moment binnen hun tijdvak)")
         st.caption(
             "Eén rij per apparaat. Rijen toevoegen en verwijderen kan in de tabel. Ga met de muis op een kolomkop staan voor uitleg. "
@@ -526,17 +591,48 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
             "apparaten",
             Apparaat,
             hh.apparaten,
+            # De getalkolommen hebben een vaste, krappe breedte (in pixels).
+            # Zonder dat maakt de editor ze zo breed dat de laatste kolom, het
+            # jaarverbruik, buiten beeld valt en alleen door opzij te schuiven
+            # te zien is. De naam krijgt de ruimte die overblijft.
             {
                 "naam": st.column_config.TextColumn("Naam", help=bij_veld("Apparaat.naam")),
-                "vermogen_w": st.column_config.NumberColumn("Vermogen (W)", min_value=0, help=bij_veld("Apparaat.vermogen_w")),
-                "duur_min": st.column_config.NumberColumn("Duur (min)", min_value=0, help=bij_veld("Apparaat.duur_min")),
-                "keer_per_week": st.column_config.NumberColumn("Keer per week", min_value=0, help=bij_veld("Apparaat.keer_per_week")),
-                "van_uur": st.column_config.NumberColumn(
-                    "Start vanaf (uur)", min_value=0, max_value=24, help=bij_veld("Apparaat.van_uur")
+                "vermogen_w": st.column_config.NumberColumn(
+                    "Vermogen (W)", min_value=0, width=110, help=bij_veld("Apparaat.vermogen_w")
                 ),
-                "tot_uur": st.column_config.NumberColumn("Start tot (uur)", min_value=0, max_value=24, help=bij_veld("Apparaat.tot_uur")),
-                "fase": st.column_config.SelectboxColumn("Fase", options=[0, 1, 2, 3], help=bij_veld("Apparaat.fase")),
+                "duur_min": st.column_config.NumberColumn("Duur (min)", min_value=0, width=95, help=bij_veld("Apparaat.duur_min")),
+                "keer_per_week": st.column_config.NumberColumn(
+                    "Keer per week", min_value=0, width=110, help=bij_veld("Apparaat.keer_per_week")
+                ),
+                "van_uur": st.column_config.NumberColumn(
+                    "Start vanaf (uur)", min_value=0, max_value=24, width=125, help=bij_veld("Apparaat.van_uur")
+                ),
+                "tot_uur": st.column_config.NumberColumn(
+                    "Start tot (uur)", min_value=0, max_value=24, width=110, help=bij_veld("Apparaat.tot_uur")
+                ),
+                "fase": st.column_config.SelectboxColumn("Fase", options=[0, 1, 2, 3], width=65, help=bij_veld("Apparaat.fase")),
+                # Uitgerekend, niet in te vullen. De uitleg staat hier en niet
+                # in ``uitleg.py``: die teksten horen elk bij een veld van de
+                # Config, en dit is geen veld maar een afgeleide ervan.
+                KWH_KOLOM: st.column_config.NumberColumn(
+                    "kWh per jaar",
+                    disabled=True,
+                    width=105,
+                    format="%d",
+                    help="**Wat is het?** Het verwachte jaarverbruik van dit apparaat: vermogen × duur × aantal keren per jaar.\n\n"
+                    "**Kun je het invullen?** Nee, de app rekent het uit; het verandert mee als je de rij aanpast.\n\n"
+                    "**Hoe lees je het?** Als controle op je invoer: tel de rijen en de basislast op en vergelijk dat met je "
+                    "jaarafrekening (zonder warmtepomp en auto). De simulatie kiest met toeval wanneer het apparaat draait "
+                    "en komt daardoor iets anders uit. Vallen twee beurten op één dag samen (een apparaat dat lang draait "
+                    "en in een smal tijdvak start), dan telt de simulatie die overlap één keer en komt ze lager uit.",
+                ),
             },
+            afgeleid={KWH_KOLOM: lambda apparaat: round(apparaat_kwh_per_jaar(apparaat))},
+        )
+        apparaten_kwh = sum(apparaat_kwh_per_jaar(a) for a in hh.apparaten)
+        st.caption(
+            f"Apparaten samen: **{nl(apparaten_kwh)} kWh per jaar**. Met de basislast erbij: "
+            f"**{nl(apparaten_kwh + basis_kwh)} kWh per jaar** (zonder warmtepomp en auto)."
         )
 
     with st.expander("Netcongestie (overspanning door zonne-opwek)"):

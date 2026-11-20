@@ -14,7 +14,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from batsim.config import Config
+from batsim.belasting import apparaat_kwh_per_jaar, basislast_kwh_per_jaar, huishoud_profiel
+from batsim.config import Apparaat, Config, Huishouden
 from batsim.huis import warmteverlies_w_per_k
 from batsim.resultaat import in_bezit, investering
 from batsim.simulatie import plan_handel, voer_uit, zonder_batterij
@@ -354,3 +355,41 @@ def test_config_heen_en_terug():
     cfg.batterij.capaciteit_kwh = 22.5
     cfg.zon.velden[0].naam = "Schuur"
     assert Config.uit_dict(cfg.naar_dict()).naar_dict() == cfg.naar_dict()
+
+
+def test_jaarverbruik_basislast_en_apparaat():
+    """De kWh per jaar die de app bij het invullen toont, kloppen met de rekensom."""
+    hh = Huishouden(basislast_w=[100.0, 50.0, 0.0], apparaten=[])
+    # 150 W, 8760 uur.
+    assert basislast_kwh_per_jaar(hh) == pytest.approx(1314.0)
+    # 2 kW, een halfuur, elke dag: 1 kWh per dag.
+    assert apparaat_kwh_per_jaar(Apparaat("Test", 2000, 30, 7, 8, 20, 1)) == pytest.approx(365.0)
+    # Een rij die de simulatie overslaat, telt ook hier niet mee.
+    assert apparaat_kwh_per_jaar(Apparaat("Uit", 2000, 30, 0, 8, 20, 1)) == 0.0
+
+
+def test_jaarverbruik_past_bij_het_gesimuleerde_profiel():
+    """Het getal in de app en het profiel van de simulatie vertellen hetzelfde.
+
+    Het getal is een verwachting en het profiel een trekking met toeval, dus
+    gelijk zijn ze niet; over een heel jaar blijft het verschil wel klein.
+    Loopt dit uiteen, dan is een van de twee berekeningen gewijzigd zonder de
+    andere.
+
+    Bewust niet met de standaardapparaten: daar zitten apparaten bij die lang
+    draaien en in een smal tijdvak starten (verlichting: vier uur, start
+    tussen 18 en 19 uur). Twee beurten op één dag vallen dan samen, de
+    simulatie telt die overlap één keer en komt zo'n 8% onder de som van de
+    rijen uit. Dat is gedrag van het model, geen rekenfout; dit apparaat is
+    kort en breed gespreid, zodat overlap hier geen rol speelt.
+    """
+    hh = Huishouden(basislast_w=[60.0, 50.0, 40.0], apparaten=[Apparaat("Kort", 2000, 3, 35, 0, 24, 1)])
+    dt_h = 5 / 60
+    per_dag = int(24 / dt_h)
+    dag_nr = np.repeat(np.arange(365), per_dag)
+    lokaal_uur = np.tile(np.arange(per_dag) * dt_h, 365)
+    profiel = huishoud_profiel(hh, dag_nr, lokaal_uur, dt_h, np.random.default_rng(1))
+
+    gesimuleerd = profiel.sum() * dt_h
+    verwacht = basislast_kwh_per_jaar(hh) + sum(apparaat_kwh_per_jaar(a) for a in hh.apparaten)
+    assert gesimuleerd == pytest.approx(verwacht, rel=0.05)

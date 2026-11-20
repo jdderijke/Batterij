@@ -16,7 +16,48 @@ from __future__ import annotations
 
 import numpy as np
 
-from .config import Huishouden
+from .config import Apparaat, Huishouden
+
+# Een gewoon jaar; het verschil met een schrikkeljaar (0,3%) is kleiner dan de
+# onzekerheid in wat iemand als vermogen en gebruik invult.
+UREN_PER_JAAR = 8760.0
+
+
+def basislast_kwh_per_jaar(huishouden: Huishouden) -> float:
+    """Geeft het jaarverbruik van de basislast, alle fasen samen, in kWh.
+
+    Waarom dit bestaat:
+        Wie de basislast invult in watt, heeft weinig gevoel bij wat dat over
+        een jaar is; op de jaarafrekening staat kWh. De app toont dit getal
+        daarom naast de invoervelden, zodat de invoer te vergelijken is met
+        het eigen jaarverbruik.
+    """
+    return sum(huishouden.basislast_w) / 1000.0 * UREN_PER_JAAR
+
+
+def apparaat_kwh_per_jaar(apparaat: Apparaat) -> float:
+    """Geeft het verwachte jaarverbruik van één apparaat in kWh.
+
+    Waarom dit bestaat:
+        Zelfde reden als ``basislast_kwh_per_jaar``: de app toont dit per rij
+        in de apparatentabel, zodat een tikfout (een oven die 4.000 kWh per
+        jaar verbruikt) opvalt vóórdat er gerekend wordt.
+
+    Het is een verwachting, niet de uitkomst van de simulatie: vermogen maal
+    duur maal het gemiddelde aantal keren per jaar. ``huishoud_profiel`` kiest
+    met toeval op welke dagen het apparaat draait en komt daardoor in een
+    bepaald jaar iets hoger of lager uit. Draait een apparaat zo vaak en zo
+    lang dat beurten elkaar overlappen, dan telt de simulatie de overlap één
+    keer en is haar uitkomst lager dan dit getal.
+
+    Afgewezen: het getal uit het gesimuleerde profiel halen. Dat is er pas na
+    een simulatie, terwijl het getal bedoeld is als hulp tijdens het invullen.
+    """
+    # Dezelfde voorwaarde als in ``huishoud_profiel``: zo'n rij doet niet mee.
+    if apparaat.vermogen_w <= 0 or apparaat.duur_min <= 0 or apparaat.keer_per_week <= 0:
+        return 0.0
+    kwh_per_keer = apparaat.vermogen_w / 1000.0 * apparaat.duur_min / 60.0
+    return kwh_per_keer * apparaat.keer_per_week / 7.0 * UREN_PER_JAAR / 24.0
 
 
 def over_fasen(vermogen_kw: np.ndarray, fase: int) -> np.ndarray:

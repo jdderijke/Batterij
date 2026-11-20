@@ -9,8 +9,13 @@ map ``_internal``. Die twee horen bij elkaar: wie het programma doorgeeft,
 geeft de hele map door (bijvoorbeeld als zip).
 
 De zip achter de downloadknop in README.md is die map, ingepakt als
-``dist/Batterij.zip``. Na het bouwen opnieuw maken en committen:
+``dist/Batterij.zip`` en als bijlage bij een GitHub Release gezet. De knop
+wijst naar de nieuwste release, dus een nieuwe versie uitbrengen is: het
+versienummer in ``batsim/__init__.py`` ophogen, bouwen, inpakken en een
+release maken met dat nummer:
     powershell Compress-Archive -Path dist\\Batterij -DestinationPath dist\\Batterij.zip -Force
+    gh release create v0.1.0 dist/Batterij.zip --title "Batterijsimulatie 0.1.0" --notes "..."
+De bijlage moet ``Batterij.zip`` blijven heten; die naam staat in de knop.
 
 Waarom dit bestaat:
     Een Streamlit-app laat zich niet met één kale opdracht inpakken. Dit

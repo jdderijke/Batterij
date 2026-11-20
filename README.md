@@ -5,7 +5,7 @@ elektrische auto samen doen op een driefasige huisaansluiting, met het echte
 weer en de echte stroomprijzen van een jaar uit het verleden. Het antwoord op
 de vraag: **loont een batterij bij mij, en welke dan?**
 
-[![Download voor Windows 10 en 11](https://img.shields.io/badge/Download-Windows%2010%20en%2011-0078D4?style=for-the-badge)](https://github.com/jdderijke/Batterij/raw/main/dist/Batterij.zip)
+[![Download voor Windows 10 en 11](https://img.shields.io/badge/Download-Windows%2010%20en%2011-0078D4?style=for-the-badge)](https://github.com/jdderijke/Batterij/releases/latest/download/Batterij.zip)
 
 *Batterij.zip, ongeveer 90 MB. Python installeren is niet nodig. Zie
 [Installeren op Windows](#installeren-op-windows).*
@@ -136,8 +136,13 @@ De instellingen staan in uitklapbare blokken:
 - **Batterij en omvormers** – capaciteit, opstelling, vermogen per fase,
   rendement, en de strategie waarmee de batterij wordt ingezet.
 - **Auto en laadpaal** – de auto, de ritten en de manier van laden.
-- **Huishoudelijke apparaten** – de apparaten in huis en op welke fase ze
-  zitten.
+- **Huishoudelijke apparaten** – de basislast en de apparaten in huis, en op
+  welke fase ze zitten. Bij de basislast en achter elk apparaat staat hoeveel
+  kWh per jaar dat is, zodat je je invoer kunt vergelijken met je
+  jaarafrekening.
+
+  ![De apparatentabel met het jaarverbruik per rij](docs/screenshots/apparaten.png)
+
 - **Netcongestie** – of panelen op zonnige dagen uitvallen door overspanning.
 - **Tarieven** – het soort contract, de prijzen, salderen en terugleverkosten.
 - **Investering** – de aanschafprijzen en de levensduur waarmee gerekend
@@ -240,11 +245,15 @@ Tests:
 pytest
 ```
 
-Het Windows-programma bouwen en de zip voor de downloadknop maken:
+Het Windows-programma bouwen en als nieuwe versie uitbrengen. De downloadknop
+wijst naar de bijlage `Batterij.zip` van de nieuwste
+[release](https://github.com/jdderijke/Batterij/releases); hoog eerst het
+versienummer in `batsim/__init__.py` op en gebruik dat nummer hieronder.
 
 ```
 pyinstaller batterij.spec --noconfirm
 powershell Compress-Archive -Path dist\Batterij -DestinationPath dist\Batterij.zip -Force
+gh release create v0.1.0 dist/Batterij.zip --title "Batterijsimulatie 0.1.0" --notes "Wat er nieuw is"
 ```
 
 Het waarom van de bouwkeuzes staat in `batterij.spec`.
