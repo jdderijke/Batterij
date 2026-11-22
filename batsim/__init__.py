@@ -19,4 +19,4 @@ Opbouw (elke module heeft één onderwerp):
 """
 
 # De codeversie staat alleen hier; de app toont haar in de zijbalk.
-VERSION = "0.3.0"
+VERSION = "0.3.1"
