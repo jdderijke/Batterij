@@ -471,8 +471,35 @@ def tegel(naam: str, titel: str, obj=None, attr: str | None = None, schakellabel
             yield
 
 
+@st.fragment
 def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
-    """Toont alle instellingen, gegroepeerd per onderdeel van de installatie."""
+    """Toont alle instellingen, gegroepeerd per onderdeel van de installatie.
+
+    Waarom een fragment (``st.fragment``):
+        Een klik op de kop van een tegel laat Streamlit de pagina opnieuw
+        opbouwen. Zonder fragment is dat de HELE pagina, ook de tabbladen met
+        grafieken over een heel jaar, en duurt het openen van een tegel
+        merkbaar lang. Als fragment wordt bij een klik binnen dit tabblad
+        alleen dit tabblad opnieuw opgebouwd.
+
+        Dat is genoeg zolang er alleen een tegel open- of dichtgaat. Verandert
+        er een instelling, dan moet de rest van de pagina wel mee: de app
+        bewaart de instelling, de zijbalk toont "gewijzigd" en de tabbladen
+        met uitkomsten waarschuwen dat ze verouderd zijn. Daarom vergelijkt
+        het fragment aan het eind de instelling met die van de laatste
+        volledige opbouw (``cfg_json``, gezet in ``main``) en vraagt bij een
+        verschil alsnog om een volledige opbouw.
+
+        De vlag ``volledige_opbouw`` zet ``main`` vlak voor de aanroep. Tijdens
+        een volledige opbouw mag het fragment NIET opnieuw om een opbouw
+        vragen: ``cfg_json`` is dan nog van de vorige keer, en de pagina zou
+        zichzelf eindeloos opnieuw opbouwen.
+
+    Afgewezen: de uitklapper van Streamlit, die zonder opbouw open- en
+    dichtgaat. Die kan niet "één tegelijk open" en geen schakelaar in de kop
+    (zie ``tegel``).
+    """
+    volledige_opbouw = st.session_state.pop("volledige_opbouw", False)
     st.info(
         "Klik op de titel van een blok om het te openen; er staat er steeds één open. Een onderdeel aan- of uitzetten "
         "(bijvoorbeeld de batterij) kan met de schakelaar rechts in de kop, ook als het blok dicht is. "
@@ -866,6 +893,11 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
             "Wat al in bezit is, geef je op bij het onderdeel zelf: per veld bij Zonnepanelen (kolom 'Waarvan al in bezit') "
             "en bij Batterij en omvormers."
         )
+
+    # Is er in deze (gedeeltelijke) opbouw een instelling veranderd, dan moet
+    # de hele pagina mee; zie de uitleg bovenaan deze functie.
+    if not volledige_opbouw and cfg.naar_json() != st.session_state.get("cfg_json"):
+        st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -1624,10 +1656,16 @@ def main() -> None:
             weer_voor_instellingen = haal_data(cfg.algemeen.jaar, cfg.algemeen.knmi_station)[0]
         except Exception:  # noqa: BLE001 - zie hierboven
             weer_voor_instellingen = None
+        # Dit is een volledige opbouw van de pagina; het fragment hoeft daar
+        # zelf niet om te vragen (zie ``toon_instellingen``).
+        st.session_state["volledige_opbouw"] = True
         toon_instellingen(cfg, weer_voor_instellingen)
 
     # De instelling van dit moment bewaren, zodat ze er de volgende keer weer is.
     nu_json = cfg.naar_json()
+    # Waarmee het tabblad Instellingen vergelijkt als het alleen zichzelf
+    # opnieuw opbouwt.
+    st.session_state["cfg_json"] = nu_json
     if st.session_state.get("bewaard_json") != nu_json:
         cfg.bewaar(INSTELLINGEN_PAD)
         st.session_state["bewaard_json"] = nu_json
