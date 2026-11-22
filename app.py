@@ -1425,7 +1425,13 @@ def toon_scenarios(cfg: Config, weer: pd.DataFrame, prijzen: pd.DataFrame) -> No
         return
 
     jaren = st.session_state["scenario_jaren"]
-    st.markdown(f"**Netto voordeel over {nl(jaren)} jaar** (besparing min meerinvestering; beste bovenaan)")
+    # Het vraagteken bij de kop geeft dezelfde uitleg als bij het getal in
+    # het Overzicht en de kolom in de tabel hieronder: de som, en wat er niet
+    # in zit (restwaarde, rente, veroudering).
+    st.markdown(
+        f"**Netto voordeel over {nl(jaren)} jaar** (besparing per jaar × {nl(jaren)} − meerinvestering; beste bovenaan)",
+        help=bij_uitkomst("netto_voordeel"),
+    )
     top = tabel.head(20).iloc[::-1]
     etiket = [
         f"{nl(r['Batterij (kWh)'])} kWh · {nl(r['Panelen (kWp)'], 1)} kWp"

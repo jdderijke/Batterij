@@ -1026,10 +1026,19 @@ UITKOMSTEN: dict[str, str] = {
         "dan verdien je de batterij niet terug. Er is geen rekening gehouden met rente, veranderende prijzen of slijtage van de batterij.",
     ),
     "netto_voordeel": _uitkomst(
-        "Wat je aan het eind van de rekenperiode per saldo overhoudt: de besparing per jaar maal het aantal jaren, min de meerinvestering.",
-        "Euro, over de hele rekenperiode die bij Instellingen onder 'Investering' staat (niet per jaar).",
-        "Positief betekent dat de batterij zichzelf binnen de rekenperiode terugbetaalt en daarna nog iets oplevert. "
-        "Negatief betekent dat je er geld op toelegt. Dit is het getal om scenario's op te vergelijken.",
+        "Wat je aan het eind van de rekenperiode per saldo overhoudt. De som is: besparing per jaar × aantal jaren − meerinvestering. "
+        "De besparing per jaar is wat je minder aan stroom betaalt dan met je huidige panelen zonder batterij; de meerinvestering is wat je "
+        "daarvoor extra moet aanschaffen (wat je al hebt, telt niet mee). De hele aanschaf wordt dus binnen de rekenperiode terugverdiend "
+        "of niet: na afloop is de installatie in deze som niets meer waard.",
+        "Euro, over de hele rekenperiode die bij Instellingen onder 'Investering' staat (standaard 15 jaar; niet per jaar).",
+        "Positief betekent dat de batterij zichzelf binnen de rekenperiode terugbetaalt en dit bedrag overhoudt. "
+        "Negatief betekent dat je er in die periode geld op toelegt. Dit is het getal om scenario's op te vergelijken.\n\n"
+        "**Wat zit er niet in?** Het is een eenvoudige som. "
+        "Geen restwaarde: een installatie die na de rekenperiode nog werkt, telt niet mee (dat maakt de uitkomst wat te somber). "
+        "Geen rente of inflatie: een euro over veertien jaar telt even zwaar als een euro nu. "
+        "Elk jaar is gelijk aan het gesimuleerde jaar: zelfde weer, prijzen en tarieven. "
+        "Geen veroudering: de batterij verliest geen capaciteit en er is geen onderhoud of vervanging van omvormers "
+        "(dat maakt de uitkomst wat te rooskleurig).",
     ),
     "cycli": _uitkomst(
         "Hoe vaak de batterij in een jaar helemaal vol en weer leeg is gegaan. Twee keer half leeg telt als één cyclus.",
