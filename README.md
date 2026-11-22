@@ -169,7 +169,9 @@ niet opgeslagen.
 De instellingen staan in blokken. Klik op de titel van een blok om het te
 openen; er staat er steeds één open. Of een onderdeel aanwezig is
 (warmtepomp, zonnepanelen, batterij, auto) zet je met de schakelaar rechts in
-de kop van het blok, ook als het dicht is.
+de kop van het blok, ook als het dicht is. In elke kop staan in grijs de
+belangrijkste kentallen van dat blok, zodat je de hele installatie overziet
+zonder de blokken te openen.
 
 - **Aansluiting en load balancing** – de hoofdzekering, en welke apparaten
   terugregelen als een fase te zwaar belast wordt.

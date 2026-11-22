@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import html
 import math
 from pathlib import Path
 
@@ -422,7 +423,83 @@ def _wissel_tegel(naam: str) -> None:
             st.session_state[sleutel] += 1
 
 
-def tegel(naam: str, titel: str, obj=None, attr: str | None = None, schakellabel: str = "Aanwezig"):
+def _kentallen(cfg: Config) -> dict[str, str]:
+    """Geeft per tegel van het tabblad Instellingen de belangrijkste kentallen als korte tekst.
+
+    Waarom dit bestaat:
+        Er staat steeds maar één tegel open. Zonder kentallen in de kop is van
+        de dichte tegels niet te zien wat erin staat, en moet je ze een voor
+        een openen om de installatie te overzien. Met de kentallen erbij is
+        het tabblad in dichte toestand een samenvatting van de hele
+        instelling.
+
+    De teksten zijn bewust kort en zonder uitleg: een paar getallen die de
+    tegel typeren, in de volgorde waarin iemand de installatie zou
+    omschrijven. De volledige uitleg staat bij de velden zelf.
+
+    Returns:
+        Naam van de tegel (zoals bij ``tegel``) -> tekst voor in de kop.
+    """
+    a, h, w, z, b, au = cfg.aansluiting, cfg.huis, cfg.warmtepomp, cfg.zon, cfg.batterij, cfg.auto
+    hh, nc, t = cfg.huishouden, cfg.netcongestie, cfg.tarieven
+
+    # Aansluiting: ALB = automatische load balancing.
+    aansluiting = f"3×{nl(a.hoofdzekering_a)} A, {nl(a.spanning_v)} V" + (", ALB" if a.loadbalancing_actief else "")
+
+    huis = (
+        f"opp: {nl(h.vloeroppervlak_m2)} m², Rc: {nl(h.rc_waarde, 1)}, U: {nl(h.u_raam, 1)}, "
+        f"{nl(warmteverlies_w_per_k(h))} W/K"
+    )
+
+    warmtepomp = f"{nl(w.thermisch_vermogen_kw, 1)} kW, COP: {nl(w.cop_nominaal, 1)}" + (
+        ", tapwater" if w.tapwater_via_warmtepomp else ""
+    )
+
+    panelen = sum(v.aantal_panelen for v in z.velden)
+    kwp = sum(v.aantal_panelen * v.wp_per_paneel for v in z.velden) / 1000.0
+    zon = f"{panelen} panelen, {nl(kwp, 1)} kWp" + (f", {len(z.velden)} velden" if len(z.velden) > 1 else "")
+
+    # Korte namen voor in de kop; de volledige staan in de keuzelijst.
+    strategie = {"eigen_verbruik": "eigen verbruik", "piek_shaving": "piek shaving", "handel": "uurprijzen", "onbalans": "onbalans"}
+    batterij = (
+        f"{nl(b.capaciteit_kwh, 1)} kWh, 3×{nl(b.omvormer_kw_per_fase, 1)} kW, "
+        f"{nl(b.max_laad_c_rate, 1)}C/{nl(b.max_ontlaad_c_rate, 1)}C, "
+        f"{'hybride' if b.koppeling == 'hybride' else 'AC'}, {strategie.get(b.strategie, b.strategie)}"
+    )
+
+    laden = {"direct": "direct laden", "goedkoop": "goedkoopste uren", "zon": "op zonne-overschot"}
+    auto = f"{nl(au.accu_kwh)} kWh, {au.laad_fasen}×{nl(au.max_stroom_a)} A, {laden.get(au.strategie, au.strategie)}"
+
+    verbruik = basislast_kwh_per_jaar(hh) + sum(apparaat_kwh_per_jaar(app) for app in hh.apparaten)
+    apparaten = f"{len(hh.apparaten)} apparaten, basislast {nl(sum(hh.basislast_w))} W, {nl(verbruik)} kWh/jaar"
+
+    netcongestie = f"{nl(nc.rustspanning_v)} V, +{nl(nc.stijging_v_per_1000wm2)} V bij zon, {nl(nc.netimpedantie_ohm, 2)} Ω"
+
+    if t.contract == "vast":
+        tarieven = f"vast € {nl(t.vaste_prijs, 2)}"
+    else:
+        tarieven = "dynamisch"
+    tarieven += ", salderen" if t.salderen else ", zonder salderen"
+
+    kosten = f"€ {nl(investering(cfg)['totaal'])}, {nl(cfg.investering.levensduur_jaren)} jaar"
+
+    return {
+        "aansluiting": aansluiting,
+        "huis": huis,
+        "warmtepomp": warmtepomp,
+        "zon": zon,
+        "batterij": batterij,
+        "auto": auto,
+        "apparaten": apparaten,
+        "netcongestie": netcongestie,
+        "tarieven": tarieven,
+        "investering": kosten,
+    }
+
+
+def tegel(
+    naam: str, titel: str, obj=None, attr: str | None = None, schakellabel: str = "Aanwezig", kentallen: str = ""
+):
     """Toont één tegel van het tabblad Instellingen: een kop, en de inhoud als de tegel openstaat.
 
     Waarom dit bestaat:
@@ -449,14 +526,31 @@ def tegel(naam: str, titel: str, obj=None, attr: str | None = None, schakellabel
         obj, attr: het aan/uit-veld van de Config dat in de kop komt
             (``obj.attr``), of niets voor een tegel zonder schakelaar.
         schakellabel: de tekst bij die schakelaar.
+        kentallen: korte samenvatting van de tegel (zie ``_kentallen``); komt
+            in lichtgrijs in het midden van de kop, zodat ze ook bij een
+            dichte tegel te lezen is. De schakelaar blijft rechts staan.
     """
     is_open = st.session_state.get("open_tegel") == naam
     with st.container(border=True):
-        if obj is None:
-            kop = st.container()
-        else:
-            kop, kant = st.columns([5, 1], vertical_alignment="center")
+        # Drie vaste kolommen in elke kop: titel, kentallen, schakelaar. Ook
+        # een tegel zonder schakelaar krijgt ze alle drie, zodat de kentallen
+        # van alle tegels recht onder elkaar beginnen, ruim los van de titel.
+        kop, midden, kant = st.columns([3.5, 5, 1.5], vertical_alignment="center")
+        if obj is not None:
             schakelaar(kant, obj, attr, schakellabel)
+        if kentallen:
+            # Lichtgrijs en iets kleiner: de kentallen zijn er om na te
+            # slaan en mogen de titels niet overstemmen. De kleur is half
+            # doorzichtig grijs, zodat ze in een licht en een donker thema
+            # allebei leesbaar blijft.
+            #
+            # Was eerst: in het label van de knop, direct achter de titel
+            # (``:gray[...]``). Afgewezen omdat titel en kentallen dan tegen
+            # elkaar aan staan en het grijs van Streamlit te donker is.
+            midden.markdown(
+                f"<span style='color: rgba(128, 132, 142, 0.75); font-size: 0.875rem;'>{html.escape(kentallen)}</span>",
+                unsafe_allow_html=True,
+            )
         # Bewust zonder ``help``: een ballon die bij elke muisbeweging over de
         # kop opkomt, zit het klikken in de weg.
         kop.button(
@@ -509,8 +603,12 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
     )
     # Bij de eerste keer staat het eerste blok open.
     st.session_state.setdefault("open_tegel", "aansluiting")
+    # De kentallen voor in de koppen, één keer voor alle tegels. Ze horen bij
+    # de instelling aan het begin van deze opbouw; na een wijziging volgt
+    # altijd een nieuwe opbouw (zie hierboven), waarin ze bijgewerkt zijn.
+    kern = _kentallen(cfg)
 
-    for _ in tegel("aansluiting", "Aansluiting en load balancing"):
+    for _ in tegel("aansluiting", "Aansluiting en load balancing", kentallen=kern["aansluiting"]):
         a = cfg.aansluiting
         k1, k2, k3 = st.columns(3)
         getal(k1, a, "hoofdzekering_a", "Hoofdzekering (A per fase)", 5.0, 6.0)
@@ -529,7 +627,7 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
                 "de batterij vangt op wat er dan nog over de grens gaat, en de panelen regelen als laatste terug."
             )
 
-    for _ in tegel("huis", "Huis"):
+    for _ in tegel("huis", "Huis", kentallen=kern["huis"]):
         h = cfg.huis
         st.caption("Uit deze gegevens en het weer van het gekozen jaar volgt hoeveel warmte het huis nodig heeft.")
 
@@ -561,7 +659,7 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
     # De warmtepomp heeft een eigen tegel, los van het huis: het huis bepaalt
     # de warmtevraag, de warmtepomp is een apparaat dat aan of uit kan staan.
     w = cfg.warmtepomp
-    for _ in tegel("warmtepomp", "Warmtepomp", w, "aanwezig"):
+    for _ in tegel("warmtepomp", "Warmtepomp", w, "aanwezig", kentallen=kern["warmtepomp"]):
         k1, k2, k3, k4 = st.columns(4)
         getal(k1, w, "thermisch_vermogen_kw", "Geleverd vermogen (kW warmte)", 0.5, 1.0)
         getal(k2, w, "cop_nominaal", "COP bij 7 °C buiten", 0.1, 1.0)
@@ -580,7 +678,7 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
             getal(k3, w, "tapwater_startuur", "Boiler opwarmen om (uur)", 0.5, 0.0, 23.5)
 
     z = cfg.zon
-    for _ in tegel("zon", "Zonnepanelen", z, "aanwezig"):
+    for _ in tegel("zon", "Zonnepanelen", z, "aanwezig", kentallen=kern["zon"]):
         if not z.aanwezig:
             st.caption("Er wordt gerekend zonder panelen. De velden hieronder blijven bewaard.")
         st.caption(
@@ -621,7 +719,7 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
         getal(k1, z, "uitschakelspanning_v", "Uitschakelspanning omvormer (V)", 0.5, 230.0)
 
     b = cfg.batterij
-    for _ in tegel("batterij", "Batterij en omvormers", b, "aanwezig"):
+    for _ in tegel("batterij", "Batterij en omvormers", b, "aanwezig", kentallen=kern["batterij"]):
         k1, k2 = st.columns(2)
         keuze(k1, b, "topologie", "Topologie", TOPOLOGIEEN)
         keuze(k2, b, "koppeling", "Omvormers", KOPPELINGEN)
@@ -705,7 +803,7 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
                 st.caption("Netcongestie staat uit; deze instelling doet nu niets.")
 
     au = cfg.auto
-    for _ in tegel("auto", "Auto en laadpaal", au, "aanwezig"):
+    for _ in tegel("auto", "Auto en laadpaal", au, "aanwezig", kentallen=kern["auto"]):
         k1, k2, k3, k4 = st.columns(4)
         getal(k1, au, "accu_kwh", "Accu (kWh)", 1.0, 5.0)
         getal(k2, au, "verbruik_kwh_per_100km", "Verbruik (kWh/100 km)", 0.5, 5.0)
@@ -736,7 +834,7 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
         keuze(k1, au, "strategie", "Laadstrategie", LAADSTRATEGIEEN)
         getal(k2, au, "laadrendement", "Laadrendement (0–1)", 0.01, 0.5, 1.0)
 
-    for _ in tegel("apparaten", "Huishoudelijke apparaten"):
+    for _ in tegel("apparaten", "Huishoudelijke apparaten", kentallen=kern["apparaten"]):
         hh = cfg.huishouden
         st.markdown("**Basislast** (wat altijd aanstaat)")
         kolommen = st.columns(3)
@@ -815,7 +913,9 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
     # Netcongestie is geen apparaat maar een storing die wel of niet wordt
     # meegerekend; de schakelaar in de kop heet daarom "Meenemen".
     nc = cfg.netcongestie
-    for _ in tegel("netcongestie", "Netcongestie (overspanning door zonne-opwek)", nc, "actief", "Meenemen"):
+    for _ in tegel(
+        "netcongestie", "Netcongestie (overspanning door zonne-opwek)", nc, "actief", "Meenemen", kern["netcongestie"]
+    ):
         st.caption(
             "Op zonnige middagen leveren alle panelen in de straat tegelijk terug. De netspanning stijgt dan, en boven de "
             "uitschakelspanning (zie Zonnepanelen) schakelen omvormers zichzelf uit. Zet de schakelaar in de kop aan om te zien "
@@ -846,7 +946,7 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
                 tekst += f", in de zwaarste maand ({ergste:02d}) op de meeste dagen van {vaak.min()}:00 tot {vaak.max() + 1}:00 uur"
             st.info(tekst + ". Ter vergelijking: gemiddeld over Nederland is het volgens de netbeheerders ongeveer 11 uur per jaar.")
 
-    for _ in tegel("tarieven", "Tarieven"):
+    for _ in tegel("tarieven", "Tarieven", kentallen=kern["tarieven"]):
         t = cfg.tarieven
         k1, k2 = st.columns(2)
         keuze(k1, t, "contract", "Contract", CONTRACTEN)
@@ -865,7 +965,7 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
             "ze zijn in elk scenario gelijk."
         )
 
-    for _ in tegel("investering", "Investering"):
+    for _ in tegel("investering", "Investering", kentallen=kern["investering"]):
         i = cfg.investering
         st.markdown("*Zonnepanelen*")
         k1, k2, _ = st.columns(3)
