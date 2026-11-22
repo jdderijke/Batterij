@@ -18,6 +18,51 @@ from .huis import warmteverlies_w_per_k
 from .simulatie import Uitkomst
 from .zon import nieuw_piekvermogen_kwp, piekvermogen_kwp
 
+# Een dag telt als "off-grid mogelijk" als er die dag hooguit zoveel uit het
+# net is afgenomen. Niet precies nul: afronding in de regeling mag een dag
+# niet laten afvallen. 0,05 kWh is een lamp van 2 W die de hele dag brandt.
+OFFGRID_DREMPEL_KWH = 0.05
+
+
+def offgrid_dagen(dag_nr: np.ndarray, net_kw: np.ndarray, dt_h: float) -> tuple[int, int]:
+    """Telt de dagen waarop het huis zonder net had gekund.
+
+    Waarom dit bestaat:
+        Niet iedereen koopt een batterij om de terugverdientijd; soms is het
+        doel om onafhankelijk van het net te zijn. Dit getal zegt hoe ver een
+        installatie daarin komt: op hoeveel dagen waren zon en batterij samen
+        genoeg voor al het verbruik?
+
+    Hoe geteld:
+        Een dag (lokale tijd, middernacht tot middernacht) telt als er de
+        hele dag niets uit het net is afgenomen. Teruglevering mag: zonder net
+        zouden de panelen op zo'n moment terugregelen. Gekeken wordt naar de
+        meter, dus naar de som van de drie fasen. Dagen die maar voor een deel
+        in de simulatie zitten (het uur van het volgende jaar dat door de
+        tijdzone meekomt) tellen niet mee.
+
+        Het is een indicatie achteraf: de batterij is niet anders aangestuurd
+        dan de gekozen strategie voorschrijft, en echt los van het net vraagt
+        een omvormer die zelf een net kan vormen.
+
+    Args:
+        dag_nr: volgnummer van de (lokale) dag bij elke stap.
+        net_kw: afname van het net per stap (negatief = terugleveren).
+        dt_h: lengte van een stap in uren.
+
+    Returns:
+        Het aantal dagen, en de langste reeks van zulke dagen achter elkaar.
+    """
+    afname = np.bincount(dag_nr, weights=np.clip(net_kw, 0.0, None) * dt_h)
+    uren = np.bincount(dag_nr) * dt_h
+    # 23 uur in plaats van 24: de dag waarop de klok vooruit gaat is korter.
+    vrij = (afname <= OFFGRID_DREMPEL_KWH) & (uren >= 23.0)
+    langste = reeks = 0
+    for dag_vrij in vrij:
+        reeks = reeks + 1 if dag_vrij else 0
+        langste = max(langste, reeks)
+    return int(vrij.sum()), langste
+
 
 def investering(cfg: Config) -> dict[str, float]:
     """Schat de aanschafkosten van panelen, omvormers en batterij.
@@ -134,6 +179,9 @@ def bereken_kentallen(uitkomst: Uitkomst) -> dict:
         "hoogste_spanning_v": float(r[["spanning_l1", "spanning_l2", "spanning_l3"]].to_numpy().max()),
         "kwp": piekvermogen_kwp(cfg.zon),
         "kosten_eur": float(r["kosten"].sum()),
+        # Handel op de onbalansmarkt: wat de aanbieder uitkeert. Zit al in
+        # ``kosten_eur`` verwerkt; hier apart om het te kunnen tonen.
+        "handelsresultaat_eur": float(r["handel"].sum()),
     }
 
     # Eigen verbruik: welk deel van de zonnestroom blijft in huis?
@@ -142,6 +190,9 @@ def bereken_kentallen(uitkomst: Uitkomst) -> dict:
     # de begrenzing op 0..100% vangt dat op, maar de getallen zeggen dan minder.
     k["eigen_verbruik_pct"] = 100.0 * min(max((zon - teruglevering) / zon, 0.0), 1.0) if zon > 0 else 0.0
     k["zelfvoorzienend_pct"] = 100.0 * min(max(1.0 - afname / verbruik, 0.0), 1.0) if verbruik > 0 else 0.0
+
+    # Onafhankelijkheid van het net: dagen zonder afname.
+    k["offgrid_dagen"], k["offgrid_langste_reeks"] = offgrid_dagen(basis.dag_nr, net, dt)
 
     # Piek: het hoogste kwartiergemiddelde, de maat die netbeheerders gebruiken.
     kwartier = r["net"].resample("15min").mean() if dt < 0.25 else r["net"]

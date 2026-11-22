@@ -46,7 +46,7 @@ from . import auto as auto_mod
 from . import zon as zon_mod
 from .belasting import huishoud_profiel, over_fasen
 from .config import KNMI_STATIONS, TIJDSTAPPEN_MIN, Config
-from .data import naar_tijdstap
+from .data import kwartier_naar_tijdstap, naar_tijdstap
 from .huis import warmtepomp_profiel
 
 TIJDZONE = "Europe/Amsterdam"
@@ -55,6 +55,23 @@ TIJDZONE = "Europe/Amsterdam"
 PRIJZEN_BEKEND_UUR = 13.0
 # Aantal laadniveaus waarmee het handelsplan rekent (zie ``plan_handel``).
 PLAN_NIVEAUS = 41
+
+# Handel op de onbalansmarkt. De onbalansprijs geldt per kwartier (de
+# "onbalansverrekeningsperiode" van TenneT).
+ONBALANS_PERIODE_MIN = 15
+# Het onbalansplan wordt elke dag om middernacht (lokale tijd) opnieuw gemaakt
+# en kijkt dan anderhalve dag vooruit. Alleen de eerste 24 uur worden
+# uitgevoerd; daarna volgt het volgende plan. De halve dag extra voorkomt dat
+# de batterij elke avond wordt leegverkocht omdat het plan "daarna" niets meer
+# ziet. Afgewezen: het hele jaar in één keer plannen. Dat is even veel
+# rekenwerk, maar het plan loopt dan uit de pas zodra de werkelijke
+# laadtoestand afwijkt (load balancing, afronding op laadniveaus).
+ONBALANS_HERPLAN_UUR = 0.0
+ONBALANS_VOORUIT_UUR = 36.0
+# In een kwartier verschuift de laadtoestand veel minder dan in een uur. Met
+# de 41 niveaus van het uurplan zou een kwartier op vol vermogen maar een paar
+# niveaus beslaan; daarom rekent het onbalansplan met een fijnere verdeling.
+ONBALANS_PLAN_NIVEAUS = 81
 
 
 @dataclass
@@ -99,6 +116,10 @@ class Profielen:
     last: np.ndarray
     koop: np.ndarray
     verkoop: np.ndarray
+    # Kale onbalansprijs per stap (euro per kWh), bij afname en bij invoeden.
+    # Alleen gevuld als de batterij op de onbalansmarkt handelt.
+    onbalans_afnemen: np.ndarray | None = None
+    onbalans_invoeden: np.ndarray | None = None
 
 
 @dataclass
@@ -227,7 +248,21 @@ def bouw_basis(cfg: Config, weer: pd.DataFrame, prijzen: pd.DataFrame) -> Basis:
     return basis
 
 
-def prijzen_per_stap(cfg: Config, prijs_markt: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def handelt_op_onbalans(cfg: Config) -> bool:
+    """Zegt of deze instelling een batterij heeft die op de onbalansmarkt handelt.
+
+    Waarom dit bestaat:
+        Van dit ene antwoord hangen drie dingen af: of er onbalansprijzen nodig
+        zijn, hoe de aansluiting wordt afgerekend, en welk plan de batterij
+        volgt. Eén functie houdt die drie gelijk, ook in de app. Zonder
+        batterij is het antwoord altijd nee: de referentie "zonder batterij"
+        rekent daardoor vanzelf af op het gewone contract.
+    """
+    b = cfg.batterij
+    return b.aanwezig and b.capaciteit_kwh > 0 and b.strategie == "onbalans"
+
+
+def prijzen_per_stap(cfg: Config, prijs_markt: np.ndarray, altijd_marktprijs: bool = False) -> tuple[np.ndarray, np.ndarray]:
     """Geeft per stap wat een kWh kost en wat een teruggeleverde kWh oplevert.
 
     Salderen wordt per kWh verrekend: een teruggeleverde kWh is dan evenveel
@@ -235,11 +270,19 @@ def prijzen_per_stap(cfg: Config, prijs_markt: np.ndarray) -> tuple[np.ndarray, 
     jaar niet meer wordt teruggeleverd dan afgenomen; ``resultaat`` meldt het
     als dat niet zo is.
 
+    Args:
+        cfg: de instelling (tarieven).
+        prijs_markt: kale day-ahead-prijs per stap (euro per kWh).
+        altijd_marktprijs: reken ook bij een vast contract met de marktprijs.
+            Nodig voor handel op de onbalansmarkt: de partijen die dat voor
+            particulieren doen (Frank Energie, Zonneplan) vragen een dynamisch
+            contract, en hun verrekening gaat uit van de uurprijs op de meter.
+
     Returns:
         ``koop`` en ``verkoop``, beide in euro per kWh.
     """
     t = cfg.tarieven
-    if t.contract == "vast":
+    if t.contract == "vast" and not altijd_marktprijs:
         koop = np.full(len(prijs_markt), t.vaste_prijs)
         verkoop = koop.copy() if t.salderen else np.full(len(prijs_markt), t.vaste_terugleverprijs)
         return koop, verkoop
@@ -285,8 +328,18 @@ def netspanning_straat(cfg: Config, ghi: np.ndarray, dag_nr: np.ndarray) -> np.n
     return np.minimum(spanning, nc.plafond_v)
 
 
-def bouw_profielen(cfg: Config, weer: pd.DataFrame, prijzen: pd.DataFrame) -> Profielen:
-    """Maakt de profielen compleet: zon per fase, laadpaal en tarieven."""
+def bouw_profielen(
+    cfg: Config, weer: pd.DataFrame, prijzen: pd.DataFrame, onbalans: pd.DataFrame | None = None
+) -> Profielen:
+    """Maakt de profielen compleet: zon per fase, laadpaal en tarieven.
+
+    Args:
+        cfg: de instelling.
+        weer: uurtabel van ``data.laad_weer``.
+        prijzen: uurtabel van ``data.laad_prijzen``.
+        onbalans: kwartiertabel van ``data.laad_onbalans``. Alleen nodig als de
+            batterij op de onbalansmarkt handelt; anders wordt ze niet gebruikt.
+    """
     basis = bouw_basis(cfg, weer, prijzen)
     n = len(basis.index)
     b = cfg.batterij
@@ -314,7 +367,39 @@ def bouw_profielen(cfg: Config, weer: pd.DataFrame, prijzen: pd.DataFrame) -> Pr
             ac = np.minimum(dc * cfg.zon.pv_omvormer_rendement, piek_kw * cfg.zon.pv_omvormer_verhouding)
             pv_ac += over_fasen(ac, veld.fase)
 
-    koop, verkoop = prijzen_per_stap(cfg, basis.prijs_markt)
+    onbalans_afnemen = onbalans_invoeden = None
+    if handelt_op_onbalans(cfg):
+        # Handel op de onbalansmarkt wordt afgerekend zoals de partijen die
+        # dat voor particulieren doen (Frank Energie, Zonneplan), voor zover
+        # zij dat openbaar beschrijven:
+        #
+        # 1. Alles wat over de meter loopt, ook de stroom van de batterij,
+        #    staat op de gewone energierekening tegen de day-ahead-prijs van
+        #    het dynamische contract, met opslagen, belasting en saldering uit
+        #    de tarieven. Hier dus: ``koop`` en ``verkoop`` zoals altijd.
+        # 2. Daarnaast krijgt de klant het handelsresultaat van de batterij
+        #    uitgekeerd: de stroom van de batterij maal het verschil tussen de
+        #    onbalansprijs en de day-ahead-prijs (bij de aanbieders heet dat
+        #    verschil de "EPEX-correctie" of "tegenboeking"), min het deel dat
+        #    de aanbieder houdt. Dat rekent ``simuleer`` uit; hier worden
+        #    alleen de onbalansprijzen per stap klaargezet.
+        #
+        # Was eerst: de hele aansluiting, ook huis en zon, tegen de
+        # onbalansprijs. Afgewezen omdat geen aanbieder zo afrekent: het
+        # verbruik van het huis blijft bij hen op de uurprijs.
+        if onbalans is None:
+            raise ValueError("Handel op de onbalansmarkt vraagt om onbalansprijzen, maar die zijn niet meegegeven.")
+        kwartieren = n * cfg.algemeen.tijdstap_min // ONBALANS_PERIODE_MIN
+        if len(onbalans) != kwartieren:
+            raise ValueError(
+                f"De onbalansprijzen beslaan {len(onbalans)} kwartieren, maar de simulatie loopt over {kwartieren}."
+            )
+        stap_min = cfg.algemeen.tijdstap_min
+        onbalans_afnemen = kwartier_naar_tijdstap(onbalans["afnemen_eur_kwh"].to_numpy(), stap_min)
+        onbalans_invoeden = kwartier_naar_tijdstap(onbalans["invoeden_eur_kwh"].to_numpy(), stap_min)
+        koop, verkoop = prijzen_per_stap(cfg, basis.prijs_markt, altijd_marktprijs=True)
+    else:
+        koop, verkoop = prijzen_per_stap(cfg, basis.prijs_markt)
 
     # Wat de laadpaal "ziet": de overige lasten min de zonneproductie zoals
     # die zonder batterij op het net zou komen.
@@ -345,6 +430,8 @@ def bouw_profielen(cfg: Config, weer: pd.DataFrame, prijzen: pd.DataFrame) -> Pr
         last=basis.huishouden + basis.warmtepomp_fasen + auto["per_fase"],
         koop=koop,
         verkoop=verkoop,
+        onbalans_afnemen=onbalans_afnemen,
+        onbalans_invoeden=onbalans_invoeden,
     )
 
 
@@ -357,14 +444,24 @@ def plan_handel(
     energie_nu: float,
     energie_min: float,
     energie_max: float,
-    vermogen_max_kw: float,
+    laden_max_kw: float,
+    ontladen_max_kw: float,
     rendement_enkel: float,
     slijtage_eur_per_kwh: float,
     netto_kwh: np.ndarray,
     koop: np.ndarray,
     verkoop: np.ndarray,
+    duur_h: float = 1.0,
+    net_max_kw: float | None = None,
+    niveaus: int = PLAN_NIVEAUS,
+    premie_laden: np.ndarray | None = None,
+    premie_ontladen: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Maakt het goedkoopste laad- en ontlaadplan voor de komende uren.
+    """Maakt het goedkoopste laad- en ontlaadplan voor de komende perioden.
+
+    Eén functie voor beide vormen van handel: op uurprijzen is een periode een
+    uur, op de onbalansmarkt een kwartier. De redenering is dezelfde; alleen de
+    lengte van de periode (``duur_h``) en de prijzen verschillen.
 
     Waarom zo:
         Handelen is: laden als stroom goedkoop is en ontladen als ze duur is,
@@ -383,48 +480,80 @@ def plan_handel(
     Args:
         energie_nu: energie in de batterij op dit moment (kWh).
         energie_min, energie_max: grenzen van de bruikbare energie (kWh).
-        vermogen_max_kw: grootste laad- en ontlaadvermogen aan de AC-kant.
+        laden_max_kw: grootste laadvermogen aan de AC-kant.
+        ontladen_max_kw: grootste ontlaadvermogen aan de AC-kant. Apart van
+            het laadvermogen, omdat de accu voor beide een eigen C-snelheid
+            heeft.
         rendement_enkel: rendement in één richting (omvormer maal accu).
         slijtage_eur_per_kwh: slijtagekosten per kWh die door de accu gaat.
-        netto_kwh: per uur de verwachte afname van het huis zonder batterij
-            (negatief = overschot).
-        koop, verkoop: prijzen per uur.
+        netto_kwh: per periode de verwachte afname van het huis zonder
+            batterij, in kWh (negatief = overschot).
+        koop, verkoop: prijzen per periode.
+        duur_h: lengte van één periode in uren (1 voor uurprijzen, 0,25 voor
+            de onbalansmarkt).
+        net_max_kw: grootste vermogen over de hoofdaansluiting, in beide
+            richtingen en alle fasen samen. Het plan laadt of ontlaadt nooit
+            zo hard dat de aansluiting daarboven komt. ``None`` = geen grens.
+        niveaus: in hoeveel niveaus de laadtoestand wordt verdeeld.
+        premie_laden, premie_ontladen: per periode wat de batterij bovenop de
+            meterprijs per kWh (AC-kant) krijgt of betaalt. Voor de
+            onbalansmarkt: het deel van de klant in het verschil tussen de
+            onbalansprijs en de day-ahead-prijs. Een kWh ontladen levert
+            ``premie_ontladen`` extra op; een kWh laden kost ``premie_laden``
+            extra (negatief = laden levert geld op). ``None`` = geen premie.
 
     Returns:
-        Per uur het batterijvermogen aan de AC-kant in kW (positief = ontladen).
+        Per periode het batterijvermogen aan de AC-kant in kW (positief =
+        ontladen).
     """
-    uren = len(netto_kwh)
-    plan = np.zeros(uren)
+    perioden = len(netto_kwh)
+    plan = np.zeros(perioden)
     bereik = energie_max - energie_min
-    if uren == 0 or bereik <= 1e-9 or vermogen_max_kw <= 0:
+    if perioden == 0 or bereik <= 1e-9 or (laden_max_kw <= 0 and ontladen_max_kw <= 0):
         return plan
 
-    stap = bereik / (PLAN_NIVEAUS - 1)
-    niveau = np.arange(PLAN_NIVEAUS)
+    stap = bereik / (niveaus - 1)
+    niveau = np.arange(niveaus)
     # verschil[van, naar]: verandering van de energie in de accu (kWh) in één
-    # uur; positief = laden.
+    # periode; positief = laden.
     verschil = (niveau[None, :] - niveau[:, None]) * stap
     # Wat dat aan de AC-kant betekent: laden kost meer dan er in de accu komt,
     # ontladen levert minder dan eruit gaat. Positief = ontladen.
     ac_kwh = np.where(verschil > 0, -verschil / rendement_enkel, -verschil * rendement_enkel)
     # Overgangen die meer vermogen vragen dan er is, zijn niet toegestaan.
-    vast = np.where(np.abs(ac_kwh) <= vermogen_max_kw + 1e-9, np.abs(verschil) * slijtage_eur_per_kwh / 2.0, np.inf)
+    # Laden en ontladen hebben elk hun eigen grens.
+    haalbaar = (ac_kwh <= ontladen_max_kw * duur_h + 1e-9) & (ac_kwh >= -laden_max_kw * duur_h - 1e-9)
+    vast = np.where(haalbaar, np.abs(verschil) * slijtage_eur_per_kwh / 2.0, np.inf)
+    net_max_kwh = None if net_max_kw is None else net_max_kw * duur_h
 
-    # Van achter naar voren: wat kost de rest van de periode vanaf elk niveau?
-    restkosten = np.zeros(PLAN_NIVEAUS)
-    keuze = np.empty((uren, PLAN_NIVEAUS), dtype=int)
-    for uur in range(uren - 1, -1, -1):
-        net = netto_kwh[uur] - ac_kwh
-        kosten = np.where(net > 0, net * koop[uur], net * verkoop[uur]) + vast + restkosten[None, :]
-        keuze[uur] = np.argmin(kosten, axis=1)
-        restkosten = kosten[niveau, keuze[uur]]
+    # Van achter naar voren: wat kost de rest van de planperiode vanaf elk niveau?
+    restkosten = np.zeros(niveaus)
+    keuze = np.empty((perioden, niveaus), dtype=int)
+    for p in range(perioden - 1, -1, -1):
+        net = netto_kwh[p] - ac_kwh
+        kosten = np.where(net > 0, net * koop[p], net * verkoop[p]) + vast + restkosten[None, :]
+        if premie_laden is not None and premie_ontladen is not None:
+            # ``ac_kwh`` is positief bij ontladen en negatief bij laden; in
+            # beide gevallen gaat "stroom maal premie" van de kosten af.
+            kosten = kosten - ac_kwh * np.where(ac_kwh > 0, premie_ontladen[p], premie_laden[p])
+        if net_max_kwh is not None:
+            # De hoofdaansluiting: de batterij mag de stroom over de meter
+            # niet boven de grens brengen. Zit het huis er zonder batterij al
+            # overheen, dan mag de batterij het alleen niet erger maken;
+            # anders zou er in zo'n periode geen enkele keuze overblijven.
+            boven = max(net_max_kwh, netto_kwh[p]) + 1e-9
+            onder = min(-net_max_kwh, netto_kwh[p]) - 1e-9
+            kosten = np.where((net > boven) | (net < onder), np.inf, kosten)
+        keuze[p] = np.argmin(kosten, axis=1)
+        restkosten = kosten[niveau, keuze[p]]
 
     # Van voren naar achteren: volg vanaf de huidige laadtoestand de beste keuzes.
     nu = int(round((energie_nu - energie_min) / stap))
-    nu = min(max(nu, 0), PLAN_NIVEAUS - 1)
-    for uur in range(uren):
-        naar = keuze[uur, nu]
-        plan[uur] = ac_kwh[nu, naar]
+    nu = min(max(nu, 0), niveaus - 1)
+    for p in range(perioden):
+        naar = keuze[p, nu]
+        # Van kWh in de periode terug naar gemiddeld vermogen.
+        plan[p] = ac_kwh[nu, naar] / duur_h
         nu = naar
     return plan
 
@@ -452,7 +581,10 @@ def simuleer(cfg: Config, prof: Profielen) -> Uitkomst:
         ``soc``              laadtoestand van de hele batterij in %
         ``soc_l1..3``        laadtoestand per batterij (alleen bij 3 batterijen)
         ``koop``, ``verkoop``  prijzen in euro per kWh
-        ``kosten``           kosten van deze stap in euro (negatief = opbrengst)
+        ``handel``           uitgekeerd handelsresultaat van deze stap in euro (alleen
+                             bij handel op de onbalansmarkt; anders nul)
+        ``kosten``           kosten van deze stap in euro (negatief = opbrengst), met
+                             het handelsresultaat er al van af
     """
     basis = prof.basis
     n = len(basis.index)
@@ -474,7 +606,9 @@ def simuleer(cfg: Config, prof: Profielen) -> Uitkomst:
     e_min = [c * b.min_soc_pct / 100.0 for c in cap_groep]
     e_max = [c * b.max_soc_pct / 100.0 for c in cap_groep]
     energie = [min(max(c * b.start_soc_pct / 100.0, lo), hi) for c, lo, hi in zip(cap_groep, e_min, e_max)]
-    p_accu = [c * b.max_c_rate for c in cap_groep]
+    # Grootste vermogen van de accu (DC-kant), apart voor laden en ontladen.
+    p_accu_laden = [c * b.max_laad_c_rate for c in cap_groep]
+    p_accu_ontladen = [c * b.max_ontlaad_c_rate for c in cap_groep]
 
     # Verbruik per fase, met het stand-by-verbruik van de omvormers erbij. De
     # AC-gekoppelde zonneproductie blijft apart, omdat die bij overspanning
@@ -505,15 +639,55 @@ def simuleer(cfg: Config, prof: Profielen) -> Uitkomst:
     lb_zon = lb and aansl.lb_zonnepanelen
     p_grens = (aansl.hoofdzekering_a - aansl.loadbalancing_marge_a) * aansl.spanning_v / 1000.0
 
-    # Voorbereiding voor het handelsplan: de afname zonder batterij per uur.
-    plan = np.zeros(n // spu)
-    if strategie == "handel":
+    # De hoofdaansluiting per fase, in kW. Met load balancing is dat de grens
+    # van de regeling (zekering min marge), anders de zekering zelf.
+    p_aansluiting = p_grens if lb else aansl.hoofdzekering_a * aansl.spanning_v / 1000.0
+
+    # Voorbereiding voor het handelsplan. Beide vormen van handel volgen een
+    # plan per "planperiode": een uur bij uurprijzen, een kwartier op de
+    # onbalansmarkt. ``plan_stappen`` is het aantal simulatiestappen daarin.
+    plant = strategie in ("handel", "onbalans")
+    if strategie == "onbalans":
+        # Een planperiode is een kwartier, of het kleinste veelvoud van de
+        # tijdstap dat op kwartiergrenzen uitkomt (10 min -> 30 min, 60 min ->
+        # een uur). Bij zulke grove stappen zijn de kwartierprijzen al
+        # gemiddeld (zie ``data.kwartier_naar_tijdstap``) en is er minder te
+        # verdienen dan in werkelijkheid.
+        stap_min = round(dt * 60)
+        plan_stappen = math.lcm(ONBALANS_PERIODE_MIN, stap_min) // stap_min
+        herplan_uur = ONBALANS_HERPLAN_UUR
+        plan_niveaus = ONBALANS_PLAN_NIVEAUS
+        # Het onbalansplan houdt zelf rekening met de hoofdaansluiting. Bij
+        # handel op uurprijzen gebeurt dat bewust niet in het plan: daar grijpt
+        # alleen de load balancing in (stap 3 van de tijdlus), zoals het was.
+        plan_net_max = 3.0 * p_aansluiting
+    else:
+        plan_stappen = spu
+        herplan_uur = PRIJZEN_BEKEND_UUR
+        plan_niveaus = PLAN_NIVEAUS
+        plan_net_max = None
+    plan_duur_h = plan_stappen * dt
+    plan = np.zeros(n // plan_stappen)
+    if plant:
+        # De afname zonder batterij, de prijzen en de vermogensgrenzen, elk
+        # per planperiode.
         zonder = prof.last.sum(axis=1) + 3 * standby - prof.pv_ac.sum(axis=1)
         zonder -= np.minimum(prof.pv_dc * eta, p_omvormer).sum(axis=1)
-        netto_uur = zonder.reshape(-1, spu).mean(axis=1)
-        koop_uur = prof.koop.reshape(-1, spu).mean(axis=1)
-        verkoop_uur = prof.verkoop.reshape(-1, spu).mean(axis=1)
-        handel_vermogen = min(3 * p_omvormer, sum(p_accu))
+        heel = len(plan) * plan_stappen
+        netto_plan = zonder[:heel].reshape(-1, plan_stappen).mean(axis=1) * plan_duur_h
+        koop_plan = prof.koop[:heel].reshape(-1, plan_stappen).mean(axis=1)
+        verkoop_plan = prof.verkoop[:heel].reshape(-1, plan_stappen).mean(axis=1)
+        handel_laden = min(3 * p_omvormer, sum(p_accu_laden))
+        handel_ontladen = min(3 * p_omvormer, sum(p_accu_ontladen))
+    # Onbalans: wat de klant per kWh van de batterij krijgt bovenop de
+    # meterprijs, namelijk zijn deel van (onbalansprijs - day-ahead-prijs).
+    # Per stap voor de afrekening achteraf, per planperiode voor het plan.
+    premie_laden_plan = premie_ontladen_plan = None
+    if strategie == "onbalans":
+        premie_laden = b.onbalans_klantdeel * (prof.onbalans_afnemen - basis.prijs_markt)
+        premie_ontladen = b.onbalans_klantdeel * (prof.onbalans_invoeden - basis.prijs_markt)
+        premie_laden_plan = premie_laden[:heel].reshape(-1, plan_stappen).mean(axis=1)
+        premie_ontladen_plan = premie_ontladen[:heel].reshape(-1, plan_stappen).mean(axis=1)
     lokaal_uur = basis.lokaal_uur.tolist()
 
     net_reeks = [[0.0] * n for _ in range(3)]
@@ -546,27 +720,42 @@ def simuleer(cfg: Config, prof: Profielen) -> Uitkomst:
             aan[0] = aan[1] = aan[2] = True
 
         if (
-            strategie == "handel"
+            plant
             and not opnieuw
-            and k % spu == 0
-            and (k == 0 or lokaal_uur[k] == PRIJZEN_BEKEND_UUR)
+            and k % plan_stappen == 0
+            and k // plan_stappen < len(plan)
+            and (k == 0 or lokaal_uur[k] == herplan_uur)
         ):
-            # Nieuw plan zodra de prijzen van morgen bekend zijn. Het plan
-            # loopt tot het eind van de laatste dag waarvan de prijzen bekend
-            # zijn: bij de start is dat vandaag, om 13:00 is dat morgen.
-            uur_nu = k // spu
-            vooruit = int(24 - lokaal_uur[k]) + (24 if k > 0 else 0)
-            eind = min(uur_nu + vooruit, len(plan))
-            plan[uur_nu:eind] = plan_handel(
+            periode_nu = k // plan_stappen
+            if strategie == "handel":
+                # Nieuw plan zodra de prijzen van morgen bekend zijn. Het plan
+                # loopt tot het eind van de laatste dag waarvan de prijzen
+                # bekend zijn: bij de start is dat vandaag, om 13:00 is dat
+                # morgen.
+                vooruit_uur = int(24 - lokaal_uur[k]) + (24 if k > 0 else 0)
+            else:
+                # Onbalans: elke nacht een nieuw plan dat anderhalve dag
+                # vooruit kijkt (zie ``ONBALANS_VOORUIT_UUR``). In het echt
+                # kent niemand de onbalansprijs vooraf; dit plan kent ze
+                # allemaal en is dus een bovengrens.
+                vooruit_uur = ONBALANS_VOORUIT_UUR
+            eind = min(periode_nu + int(round(vooruit_uur / plan_duur_h)), len(plan))
+            plan[periode_nu:eind] = plan_handel(
                 sum(energie),
                 sum(e_min),
                 sum(e_max),
-                handel_vermogen,
+                handel_laden,
+                handel_ontladen,
                 eta * eta_accu,
                 b.slijtage_eur_per_kwh,
-                netto_uur[uur_nu:eind],
-                koop_uur[uur_nu:eind],
-                verkoop_uur[uur_nu:eind],
+                netto_plan[periode_nu:eind],
+                koop_plan[periode_nu:eind],
+                verkoop_plan[periode_nu:eind],
+                duur_h=plan_duur_h,
+                net_max_kw=plan_net_max,
+                niveaus=plan_niveaus,
+                premie_laden=None if premie_laden_plan is None else premie_laden_plan[periode_nu:eind],
+                premie_ontladen=None if premie_ontladen_plan is None else premie_ontladen_plan[periode_nu:eind],
             )
 
         # --- 1. Wat zou er zonder batterij over elke fase lopen? ------------
@@ -603,8 +792,26 @@ def simuleer(cfg: Config, prof: Profielen) -> Uitkomst:
                 else:
                     totaal = som if som < 0 else 0.0
                 wens[0] = wens[1] = wens[2] = totaal / 3.0
-        elif strategie == "handel":
-            wens[0] = wens[1] = wens[2] = plan[k // spu] / 3.0
+        elif plant:
+            # Handel (uurprijzen of onbalans): volg het plan, gelijk verdeeld
+            # over de drie fasen. De laatste, onvolledige planperiode van het
+            # jaar heeft geen plan; daar doet de batterij niets.
+            periode = k // plan_stappen
+            wens[0] = wens[1] = wens[2] = plan[periode] / 3.0 if periode < len(plan) else 0.0
+            if strategie == "onbalans":
+                # De hoofdaansluiting gaat voor de handel, ook als de batterij
+                # niet aan de load balancing meedoet: laden mag een fase niet
+                # boven de grens brengen en ontladen niet eronder. Het plan
+                # bewaakt het totaal van de drie fasen; hier gebeurt het per
+                # fase, omdat het verbruik niet gelijk verdeeld is. De
+                # batterij neemt alleen gas terug: een fase die zonder
+                # batterij al over de grens gaat, is werk voor de load
+                # balancing (stap 3), niet voor de handel.
+                for i, rest in enumerate((rest0, rest1, rest2)):
+                    if wens[i] < 0 and rest - wens[i] > p_aansluiting:
+                        wens[i] = min(rest - p_aansluiting, 0.0)
+                    elif wens[i] > 0 and rest - wens[i] < -p_aansluiting:
+                        wens[i] = max(rest + p_aansluiting, 0.0)
         else:
             wens[0] = wens[1] = wens[2] = 0.0
 
@@ -670,8 +877,8 @@ def simuleer(cfg: Config, prof: Profielen) -> Uitkomst:
         # --- 5. Kan de accu dat leveren? --------------------------------------
         totaal_accu = 0.0
         for g, leden in enumerate(groepen):
-            max_ontladen = min(p_accu[g], (energie[g] - e_min[g]) * eta_accu / dt)
-            max_laden = min(p_accu[g], (e_max[g] - energie[g]) / (eta_accu * dt))
+            max_ontladen = min(p_accu_ontladen[g], (energie[g] - e_min[g]) * eta_accu / dt)
+            max_laden = min(p_accu_laden[g], (e_max[g] - energie[g]) / (eta_accu * dt))
             if max_ontladen < 0:
                 max_ontladen = 0.0
             if max_laden < 0:
@@ -816,6 +1023,25 @@ def simuleer(cfg: Config, prof: Profielen) -> Uitkomst:
     # teruglevering op de andere vallen op hetzelfde moment tegen elkaar weg.
     reeksen["kosten"] = np.where(reeksen["net"] > 0, reeksen["net"] * prof.koop, reeksen["net"] * prof.verkoop) * dt
 
+    # Handel op de onbalansmarkt: het handelsresultaat dat de aanbieder aan de
+    # klant uitkeert, in euro per stap. De stroom van de batterij is het
+    # verschil tussen wat er zonder batterij over de meter zou lopen en wat er
+    # werkelijk loopt (positief = de batterij levert). Die stroom staat al
+    # tegen de day-ahead-prijs op de rekening hierboven; de premie is wat de
+    # onbalansmarkt daar voor de klant bovenop doet. Het resultaat kan in een
+    # stap negatief zijn; ook dat komt voor rekening van de klant.
+    #
+    # Aanname: de aanbieder houdt zijn deel in over het verschil met de
+    # day-ahead-prijs. Frank Energie noemt "ongeveer 15%" van het
+    # handelsresultaat, zonder openbare formule; Zonneplan noemt een "handling
+    # fee" zonder bedrag. Energiebelasting en btw over de batterijstroom
+    # volgen uit de meter (stap 1), dus uit de salderingsinstelling.
+    reeksen["handel"] = 0.0
+    if strategie == "onbalans":
+        batterij_ac = zonder - reeksen["net"].to_numpy()
+        reeksen["handel"] = batterij_ac * np.where(batterij_ac > 0, premie_ontladen, premie_laden) * dt
+        reeksen["kosten"] -= reeksen["handel"]
+
     return Uitkomst(cfg=cfg, profielen=prof, reeksen=reeksen)
 
 
@@ -826,15 +1052,24 @@ def zonder_batterij(cfg: Config) -> Config:
     return referentie
 
 
-def voer_uit(cfg: Config, weer: pd.DataFrame, prijzen: pd.DataFrame) -> Uitkomst:
+def voer_uit(
+    cfg: Config, weer: pd.DataFrame, prijzen: pd.DataFrame, onbalans: pd.DataFrame | None = None
+) -> Uitkomst:
     """Doet een complete simulatie en rekent de kentallen uit.
 
     Dit is de ene ingang voor de app, de scenariovergelijking en de tests.
+
+    Args:
+        cfg: de instelling.
+        weer: uurtabel van ``data.laad_weer``.
+        prijzen: uurtabel van ``data.laad_prijzen``.
+        onbalans: kwartiertabel van ``data.laad_onbalans``; alleen nodig als
+            de batterij op de onbalansmarkt handelt.
     """
     # Hier geïmporteerd omdat ``resultaat`` op zijn beurt de types van deze
     # module gebruikt.
     from .resultaat import bereken_kentallen
 
-    uitkomst = simuleer(cfg, bouw_profielen(cfg, weer, prijzen))
+    uitkomst = simuleer(cfg, bouw_profielen(cfg, weer, prijzen, onbalans))
     uitkomst.kentallen = bereken_kentallen(uitkomst)
     return uitkomst

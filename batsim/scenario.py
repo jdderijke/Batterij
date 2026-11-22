@@ -53,6 +53,7 @@ def vergelijk_scenarios(
     koppelingen: Iterable[str],
     strategieen: Iterable[str],
     voortgang: Callable[[int, int], None] | None = None,
+    onbalans: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Rekent alle combinaties door en geeft één rij per scenario.
 
@@ -61,6 +62,8 @@ def vergelijk_scenarios(
 
     Args:
         voortgang: wordt na elk scenario aangeroepen met (klaar, totaal).
+        onbalans: kwartiertabel van ``data.laad_onbalans``; alleen nodig als
+            "onbalans" een van de strategieën is.
 
     Returns:
         Tabel, gesorteerd op netto voordeel (beste bovenaan).
@@ -80,7 +83,7 @@ def vergelijk_scenarios(
 
     rijen = []
     for nummer, (cap, factor, topo, kop, strat) in enumerate(combinaties, start=1):
-        uitkomst = voer_uit(maak_variant(basis, cap, factor, topo, kop, strat), weer, prijzen)
+        uitkomst = voer_uit(maak_variant(basis, cap, factor, topo, kop, strat), weer, prijzen, onbalans)
         k = uitkomst.kentallen
         v = vergelijk(uitkomst, referentie)
         met_batterij = cap > 0
@@ -96,6 +99,9 @@ def vergelijk_scenarios(
                 "Meerinvestering (€)": v["meerinvestering_eur"],
                 "Terugverdientijd (jaar)": v["terugverdientijd_jaar"],
                 "Netto voordeel (€)": v["netto_voordeel_eur"],
+                # Voor wie onafhankelijk van het net wil zijn, telt dit getal
+                # zwaarder dan de terugverdientijd.
+                "Dagen off-grid": k["offgrid_dagen"],
                 "Zelfvoorzienend (%)": k["zelfvoorzienend_pct"],
                 "Eigen verbruik zon (%)": k["eigen_verbruik_pct"],
                 "Afname (kWh)": k["afname_kwh"],

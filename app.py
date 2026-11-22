@@ -16,6 +16,11 @@ Hoe de invoervelden werken:
     bestand gaat dat nummer omhoog, waardoor alle velden opnieuw beginnen met
     de geladen waarden.
 
+De tegels van het tabblad Instellingen:
+    De instellingen staan in tegels waarvan er steeds één openstaat, met in de
+    kop een schakelaar voor "aanwezig". Dat is eigen opbouw en geen
+    ``st.expander``; het waarom staat bij ``tegel``.
+
 Uitleg achter het vraagteken:
     Elk invoerveld en elke uitkomst heeft een vraagteken met uitleg voor wie
     de vaktermen niet kent. Die teksten staan in ``uitleg.py`` en niet hier:
@@ -52,13 +57,22 @@ from batsim.config import (
     ZonneVeld,
 )
 from batsim.belasting import UREN_PER_JAAR, apparaat_kwh_per_jaar, basislast_kwh_per_jaar
-from batsim.data import laad_prijzen, laad_weer
+from batsim.data import (
+    ONBALANS_DOWNLOADPAGINA,
+    OnbalansOntbreekt,
+    importeer_onbalans,
+    laad_onbalans,
+    laad_prijzen,
+    laad_weer,
+    onbalans_beschikbaar,
+    onbalans_pad,
+)
 from batsim.huis import warmteverlies_w_per_k
 from batsim.paden import gebruikersmap
 from batsim.resultaat import in_bezit, investering, vergelijk
 from batsim.scenario import vergelijk_scenarios
-from batsim.simulatie import Uitkomst, netspanning_straat, voer_uit, zonder_batterij
-from bestandskeuze import kies_om_op_te_slaan, kies_om_te_openen
+from batsim.simulatie import Uitkomst, handelt_op_onbalans, netspanning_straat, voer_uit, zonder_batterij
+from bestandskeuze import kies_csv_om_te_openen, kies_om_op_te_slaan, kies_om_te_openen
 from uitleg import bij_uitkomst, bij_veld
 
 # De laatst gebruikte instellingen. Als script in de projectmap, als
@@ -297,6 +311,24 @@ def haal_data(jaar: int, station: int) -> tuple[pd.DataFrame, pd.DataFrame]:
     return laad_weer(jaar, station), laad_prijzen(jaar)
 
 
+@st.cache_data(show_spinner=False)
+def _lees_onbalans(jaar: int, gewijzigd: float) -> pd.DataFrame:
+    """Leest de ingelezen onbalansprijzen van schijf; zie ``haal_onbalans``."""
+    return laad_onbalans(jaar)
+
+
+def haal_onbalans(jaar: int) -> pd.DataFrame:
+    """Geeft de onbalansprijzen van ``jaar``, of een ``OnbalansOntbreekt`` als ze er niet zijn.
+
+    Anders dan ``haal_data`` komt hier niets van internet: de prijzen zijn
+    meegeleverd, of door de gebruiker zelf ingelezen (zie ``batsim/data.py``).
+    De wijzigingstijd van het bewaarde bestand hoort bij de sleutel van de
+    voorraad, zodat opnieuw inlezen ook echt nieuwe prijzen geeft.
+    """
+    pad = onbalans_pad(jaar)
+    return _lees_onbalans(jaar, pad.stat().st_mtime if pad.exists() else 0.0)
+
+
 def opmaak(fig: go.Figure, hoogte: int, y_titels: list[str]) -> go.Figure:
     """Geeft elke grafiek dezelfde rustige opmaak.
 
@@ -369,15 +401,89 @@ def toon_in_bezit(cfg: Config) -> None:
         st.caption("Al in bezit en daarom niet meegeteld: " + ", ".join(regels) + ".")
 
 
+def _wissel_tegel(naam: str) -> None:
+    """Opent de tegel ``naam`` en sluit daarmee alle andere; een open tegel gaat dicht.
+
+    Wordt aangeroepen door de knop in de kop van een tegel, vóór de volgende
+    opbouw van het scherm.
+
+    De tabel-editors (zonnevelden, apparaten) beginnen hierna opnieuw vanuit
+    de instelling van dit moment. Dat moet: een editor die een run lang niet
+    getoond is, is zijn bijgehouden wijzigingen kwijt. Zonder deze stap zou hij
+    bij het heropenen van zijn tegel weer met zijn oude begintabel starten en
+    de wijzigingen in de instelling daarmee terugdraaien.
+    """
+    huidig = st.session_state.get("open_tegel")
+    st.session_state["open_tegel"] = None if huidig == naam else naam
+    for sleutel in list(st.session_state):
+        if isinstance(sleutel, str) and sleutel.startswith("begin_"):
+            del st.session_state[sleutel]
+        elif isinstance(sleutel, str) and sleutel.startswith("ronde_"):
+            st.session_state[sleutel] += 1
+
+
+def tegel(naam: str, titel: str, obj=None, attr: str | None = None, schakellabel: str = "Aanwezig"):
+    """Toont één tegel van het tabblad Instellingen: een kop, en de inhoud als de tegel openstaat.
+
+    Waarom dit bestaat:
+        Twee wensen die de uitklapper van Streamlit (``st.expander``) niet kan
+        vervullen. Er mag altijd maar één tegel openstaan: het openen van een
+        tegel sluit de andere. En of een onderdeel aanwezig is (batterij,
+        warmtepomp, ...) moet met een schakelaar in de kop te zetten zijn, ook
+        als de tegel dicht is; in de kop van een uitklapper passen geen
+        invoervelden. Daarom bouwt deze functie de tegel zelf: een kader met
+        een knop als kop, daarnaast de schakelaar, en eronder de inhoud. Welke
+        tegel openstaat, staat als één naam in de sessie; meer dan één kan dus
+        niet.
+
+    Gebruik:
+        ``for _ in tegel("batterij", "Batterij en omvormers", b, "aanwezig"):``
+        met de inhoud van de tegel als lus. De lus draait één keer als de
+        tegel openstaat en anders niet. Een lus en geen ``with``: een
+        ``with``-blok kan zijn inhoud niet overslaan, en de inhoud van een
+        dichte tegel moet juist niet worden opgebouwd.
+
+    Args:
+        naam: korte naam van de tegel; maakt de sleutels in de sessie uniek.
+        titel: de tekst in de kop.
+        obj, attr: het aan/uit-veld van de Config dat in de kop komt
+            (``obj.attr``), of niets voor een tegel zonder schakelaar.
+        schakellabel: de tekst bij die schakelaar.
+    """
+    is_open = st.session_state.get("open_tegel") == naam
+    with st.container(border=True):
+        if obj is None:
+            kop = st.container()
+        else:
+            kop, kant = st.columns([5, 1], vertical_alignment="center")
+            schakelaar(kant, obj, attr, schakellabel)
+        # Bewust zonder ``help``: een ballon die bij elke muisbeweging over de
+        # kop opkomt, zit het klikken in de weg.
+        kop.button(
+            titel,
+            key=f"tegelkop_{naam}",
+            type="tertiary",
+            icon=":material/keyboard_arrow_down:" if is_open else ":material/chevron_right:",
+            on_click=_wissel_tegel,
+            args=(naam,),
+        )
+        if is_open:
+            yield
+
+
 def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
     """Toont alle instellingen, gegroepeerd per onderdeel van de installatie."""
     st.info(
+        "Klik op de titel van een blok om het te openen; er staat er steeds één open. Een onderdeel aan- of uitzetten "
+        "(bijvoorbeeld de batterij) kan met de schakelaar rechts in de kop, ook als het blok dicht is. "
         "Achter elk veld staat een **vraagteken (?)**. Ga er met de muis op staan (of tik erop) voor uitleg in gewone taal: "
         "wat het is, welke waarden gebruikelijk zijn en waar het invloed op heeft. In de tabellen staat de uitleg bij de kolomkop. "
         "Weet je een waarde niet, laat dan de standaardwaarde staan."
     )
+    # Bij de eerste keer staat het eerste blok open.
+    st.session_state.setdefault("open_tegel", "aansluiting")
 
-    with st.expander("Aansluiting en load balancing", expanded=True):
+    for _ in tegel("aansluiting", "Aansluiting en load balancing"):
         a = cfg.aansluiting
         k1, k2, k3 = st.columns(3)
         getal(k1, a, "hoofdzekering_a", "Hoofdzekering (A per fase)", 5.0, 6.0)
@@ -396,9 +502,8 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
                 "de batterij vangt op wat er dan nog over de grens gaat, en de panelen regelen als laatste terug."
             )
 
-    with st.expander("Huis en warmtepomp"):
-        h, w = cfg.huis, cfg.warmtepomp
-        st.markdown("**Huis**")
+    for _ in tegel("huis", "Huis"):
+        h = cfg.huis
         st.caption("Uit deze gegevens en het weer van het gekozen jaar volgt hoeveel warmte het huis nodig heeft.")
 
         st.markdown("*Afmetingen en isolatie*")
@@ -426,8 +531,10 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
         getal(k3, h, "warmtecapaciteit_wh_m2k", "Warmteopslag in het gebouw (Wh per m² per °C)", 10.0, 20.0)
         st.caption(f"Met deze waarden verliest het huis {nl(warmteverlies_w_per_k(h))} W per graad verschil tussen binnen en buiten.")
 
-        st.markdown("**Warmtepomp**")
-        schakelaar(st, w, "aanwezig", "Warmtepomp aanwezig")
+    # De warmtepomp heeft een eigen tegel, los van het huis: het huis bepaalt
+    # de warmtevraag, de warmtepomp is een apparaat dat aan of uit kan staan.
+    w = cfg.warmtepomp
+    for _ in tegel("warmtepomp", "Warmtepomp", w, "aanwezig"):
         k1, k2, k3, k4 = st.columns(4)
         getal(k1, w, "thermisch_vermogen_kw", "Geleverd vermogen (kW warmte)", 0.5, 1.0)
         getal(k2, w, "cop_nominaal", "COP bij 7 °C buiten", 0.1, 1.0)
@@ -445,9 +552,8 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
             getal(k2, w, "tapwater_cop", "COP tapwater", 0.1, 1.0)
             getal(k3, w, "tapwater_startuur", "Boiler opwarmen om (uur)", 0.5, 0.0, 23.5)
 
-    with st.expander("Zonnepanelen"):
-        z = cfg.zon
-        schakelaar(st, z, "aanwezig", "Zonnepanelen aanwezig")
+    z = cfg.zon
+    for _ in tegel("zon", "Zonnepanelen", z, "aanwezig"):
         if not z.aanwezig:
             st.caption("Er wordt gerekend zonder panelen. De velden hieronder blijven bewaard.")
         st.caption(
@@ -487,20 +593,20 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
         k1, _, _ = st.columns(3)
         getal(k1, z, "uitschakelspanning_v", "Uitschakelspanning omvormer (V)", 0.5, 230.0)
 
-    with st.expander("Batterij en omvormers", expanded=True):
-        b = cfg.batterij
-        schakelaar(st, b, "aanwezig", "Batterij aanwezig")
+    b = cfg.batterij
+    for _ in tegel("batterij", "Batterij en omvormers", b, "aanwezig"):
         k1, k2 = st.columns(2)
         keuze(k1, b, "topologie", "Topologie", TOPOLOGIEEN)
         keuze(k2, b, "koppeling", "Omvormers", KOPPELINGEN)
         k1, k2, k3, k4 = st.columns(4)
         getal(k1, b, "capaciteit_kwh", "Capaciteit totaal (kWh)", 1.0)
         getal(k2, b, "omvormer_kw_per_fase", "Omvormer per fase (kW)", 0.5)
-        getal(k3, b, "max_c_rate", "Grootste laadsnelheid (C)", 0.1, 0.05)
-        getal(k4, b, "standby_w_per_omvormer", "Stand-by per omvormer (W)", 1.0)
-        k1, k2 = st.columns(2)
+        getal(k3, b, "max_laad_c_rate", "Grootste laadsnelheid (C)", 0.1, 0.05)
+        getal(k4, b, "max_ontlaad_c_rate", "Grootste ontlaadsnelheid (C)", 0.1, 0.05)
+        k1, k2, k3 = st.columns(3)
         getal(k1, b, "in_bezit_kwh", "Waarvan al in bezit (kWh)", 1.0)
-        schakelaar(k2, b, "omvormers_in_bezit", "Omvormers bij de batterij al in bezit")
+        getal(k2, b, "standby_w_per_omvormer", "Stand-by per omvormer (W)", 1.0)
+        schakelaar(k3, b, "omvormers_in_bezit", "Omvormers bij de batterij al in bezit")
         k1, k2, k3, k4 = st.columns(4)
         getal(k1, b, "min_soc_pct", "Laagste laadtoestand (%)", 5.0, 0.0, 90.0)
         getal(k2, b, "max_soc_pct", "Hoogste laadtoestand (%)", 5.0, 10.0, 100.0)
@@ -515,14 +621,53 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
             k1, k2 = st.columns(2)
             getal(k1, b, "piekgrens_kw", "Piekgrens afname (kW, alle fasen samen)", 0.5, 0.5)
             schakelaar(k2, b, "herladen_uit_net", "Bijladen uit het net onder de grens")
-        if b.strategie == "handel":
+        if b.strategie in ("handel", "onbalans"):
+            # Beide vormen van handel wegen de slijtage op dezelfde manier mee.
             k1, _ = st.columns(2)
             getal(k1, b, "slijtage_eur_per_kwh", "Slijtagekosten (€ per kWh door de accu)", 0.01, 0.0)
+        if b.strategie == "handel":
             st.caption(
                 "Het plan wordt elke dag om 13:00 opnieuw gemaakt, als de prijzen van morgen bekend zijn. "
                 "Het rekent met het werkelijke verbruik en de werkelijke zon van die uren: een perfecte voorspelling, "
                 "dus de uitkomst is een bovengrens."
             )
+        if b.strategie == "onbalans":
+            jaar = cfg.algemeen.jaar
+            k1, _ = st.columns(2)
+            getal(k1, b, "onbalans_klantdeel", "Jouw deel van het handelsresultaat (0–1)", 0.05, 0.0, 1.0)
+            st.caption(
+                "De batterij koopt en verkoopt per kwartier op de onbalansmarkt van TenneT, binnen de grenzen van de "
+                "hoofdaansluiting, de omvormers en de laad- en ontlaadsnelheid van de accu. "
+                "Afgerekend wordt zoals Frank Energie en Zonneplan het doen: alles wat over je meter loopt, ook de stroom "
+                "van de batterij, staat op je gewone rekening tegen de uurprijs van een dynamisch contract (met de opslagen, "
+                "belasting en saldering uit het blok Tarieven). Daarnaast krijg je het handelsresultaat uitgekeerd: de stroom "
+                "van de batterij maal het verschil tussen onbalansprijs en uurprijs, min het deel van de aanbieder. "
+                "Het plan kent alle prijzen vooraf, terwijl in het echt niemand de onbalansprijs van tevoren weet: "
+                "de uitkomst is een **ruime bovengrens**."
+            )
+            # De onbalansprijzen van TenneT worden met het programma
+            # meegeleverd (zie ``batsim/data.py``). Alleen voor een jaar dat
+            # er niet bij zit, kan de gebruiker zelf een bestand inlezen; de
+            # knop staat er daarom alleen dan.
+            if onbalans_beschikbaar(jaar):
+                st.caption(f"Onbalansprijzen {jaar}: aanwezig (verrekenprijzen van TenneT, per kwartier).")
+            else:
+                st.warning(
+                    f"Voor {jaar} zijn geen onbalansprijzen meegeleverd. Kies in de zijbalk een ander jaar, of download ze bij "
+                    f"[TenneT]({ONBALANS_DOWNLOADPAGINA}): kies 'Settlement prices', het jaar {jaar} en het formaat CSV, "
+                    "en lees het bestand hieronder in. Dat hoeft per jaar maar één keer."
+                )
+                if st.button(f"Onbalansprijzen {jaar} inlezen…", key="onbalans_inlezen"):
+                    pad = _kies(kies_csv_om_te_openen)
+                    if pad is not None:
+                        try:
+                            importeer_onbalans(pad, jaar)
+                            st.session_state["melding"] = f"Onbalansprijzen van {jaar} ingelezen uit {pad.name}."
+                        except (OSError, ValueError, RuntimeError) as fout:
+                            st.session_state["foutmelding"] = f"{pad.name} is niet in te lezen: {fout}"
+                        # Opnieuw opbouwen, zodat de regel hierboven de nieuwe
+                        # toestand toont; de melding verschijnt in de zijbalk.
+                        st.rerun()
 
         st.markdown("**Netcongestie**")
         k1, k2 = st.columns(2)
@@ -532,9 +677,8 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
             if not cfg.netcongestie.actief:
                 st.caption("Netcongestie staat uit; deze instelling doet nu niets.")
 
-    with st.expander("Auto en laadpaal"):
-        au = cfg.auto
-        schakelaar(st, au, "aanwezig", "Elektrische auto aanwezig")
+    au = cfg.auto
+    for _ in tegel("auto", "Auto en laadpaal", au, "aanwezig"):
         k1, k2, k3, k4 = st.columns(4)
         getal(k1, au, "accu_kwh", "Accu (kWh)", 1.0, 5.0)
         getal(k2, au, "verbruik_kwh_per_100km", "Verbruik (kWh/100 km)", 0.5, 5.0)
@@ -565,7 +709,7 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
         keuze(k1, au, "strategie", "Laadstrategie", LAADSTRATEGIEEN)
         getal(k2, au, "laadrendement", "Laadrendement (0–1)", 0.01, 0.5, 1.0)
 
-    with st.expander("Huishoudelijke apparaten"):
+    for _ in tegel("apparaten", "Huishoudelijke apparaten"):
         hh = cfg.huishouden
         st.markdown("**Basislast** (wat altijd aanstaat)")
         kolommen = st.columns(3)
@@ -641,14 +785,15 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
             f"**{nl(apparaten_kwh + basis_kwh)} kWh per jaar** (zonder warmtepomp en auto)."
         )
 
-    with st.expander("Netcongestie (overspanning door zonne-opwek)"):
-        nc = cfg.netcongestie
+    # Netcongestie is geen apparaat maar een storing die wel of niet wordt
+    # meegerekend; de schakelaar in de kop heet daarom "Meenemen".
+    nc = cfg.netcongestie
+    for _ in tegel("netcongestie", "Netcongestie (overspanning door zonne-opwek)", nc, "actief", "Meenemen"):
         st.caption(
             "Op zonnige middagen leveren alle panelen in de straat tegelijk terug. De netspanning stijgt dan, en boven de "
-            "uitschakelspanning (zie Zonnepanelen) schakelen omvormers zichzelf uit. Zet dit aan om te zien wat dat kost "
-            "en wat een batterij eraan kan doen."
+            "uitschakelspanning (zie Zonnepanelen) schakelen omvormers zichzelf uit. Zet de schakelaar in de kop aan om te zien "
+            "wat dat kost en wat een batterij eraan kan doen."
         )
-        schakelaar(st, nc, "actief", "Netcongestie meenemen als storing")
         k1, k2, k3 = st.columns(3)
         getal(k1, nc, "rustspanning_v", "Netspanning zonder zon (V)", 0.5, 200.0)
         getal(k2, nc, "stijging_v_per_1000wm2", "Stijging bij zon (V per 1000 W/m²)", 1.0)
@@ -674,7 +819,7 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
                 tekst += f", in de zwaarste maand ({ergste:02d}) op de meeste dagen van {vaak.min()}:00 tot {vaak.max() + 1}:00 uur"
             st.info(tekst + ". Ter vergelijking: gemiddeld over Nederland is het volgens de netbeheerders ongeveer 11 uur per jaar.")
 
-    with st.expander("Tarieven"):
+    for _ in tegel("tarieven", "Tarieven"):
         t = cfg.tarieven
         k1, k2 = st.columns(2)
         keuze(k1, t, "contract", "Contract", CONTRACTEN)
@@ -693,7 +838,7 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
             "ze zijn in elk scenario gelijk."
         )
 
-    with st.expander("Investering"):
+    for _ in tegel("investering", "Investering"):
         i = cfg.investering
         st.markdown("*Zonnepanelen*")
         k1, k2, _ = st.columns(3)
@@ -779,6 +924,26 @@ def toon_overzicht(uit: Uitkomst, ref: Uitkomst) -> None:
         help=bij_uitkomst("eigen_verbruik"),
     )
 
+    # Onafhankelijkheid van het net. Alleen bij de strategie "eigen verbruik":
+    # alleen daar is de batterij erop gericht het huis zelf te voeden. Bij
+    # handel of piek shaving laadt ze ook uit het net en zegt het aantal dagen
+    # zonder afname niets over wat de installatie zou kunnen.
+    if uit.cfg.batterij.aanwezig and uit.cfg.batterij.strategie == "eigen_verbruik":
+        st.markdown("**Onafhankelijk van het net**")
+        k1, k2, _, _, _ = st.columns(5)
+        k1.metric(
+            "Dagen off-grid mogelijk",
+            f"{k['offgrid_dagen']} dagen",
+            f"{k['offgrid_dagen'] - r['offgrid_dagen']} dagen",
+            help=bij_uitkomst("offgrid_dagen"),
+        )
+        k2.metric(
+            "Langste reeks achter elkaar",
+            f"{k['offgrid_langste_reeks']} dagen",
+            f"{k['offgrid_langste_reeks'] - r['offgrid_langste_reeks']} dagen",
+            help=bij_uitkomst("offgrid_reeks"),
+        )
+
     st.markdown("**Loont de batterij?**")
     k1, k2, k3, k4, k5 = st.columns(5)
     k1.metric("Besparing per jaar", f"€ {nl(v['besparing_eur_per_jaar'])}", help=bij_uitkomst("besparing"))
@@ -790,6 +955,14 @@ def toon_overzicht(uit: Uitkomst, ref: Uitkomst) -> None:
         help=bij_uitkomst("netto_voordeel"),
     )
     k5.metric("Batterijcycli per jaar", nl(k["cycli"] / jaren), help=bij_uitkomst("cycli"))
+    if handelt_op_onbalans(uit.cfg):
+        # Het handelsresultaat zit al in de stroomkosten en de besparing
+        # hierboven; deze regel laat alleen zien hoe groot dat deel is.
+        st.caption(
+            f"In de stroomkosten is **€ {nl(k['handelsresultaat_eur'] / jaren)} per jaar** uitgekeerd handelsresultaat van de "
+            f"onbalansmarkt verwerkt (jouw deel van {nl(uit.cfg.batterij.onbalans_klantdeel * 100)}%). "
+            "De rest van het effect van de batterij staat op de gewone rekening, tegen de uurprijs."
+        )
 
     st.markdown(f"**Zon, verbruik en pieken in {jaar}**")
     k1, k2, k3, k4, k5 = st.columns(5)
@@ -931,8 +1104,12 @@ def toon_tijdverloop(uit: Uitkomst) -> None:
     )
 
 
-def toon_fasen(uit: Uitkomst, weer: pd.DataFrame, prijzen: pd.DataFrame) -> None:
-    """Toont de stroom per fase tegenover de hoofdzekering en wat load balancing doet."""
+def toon_fasen(uit: Uitkomst, weer: pd.DataFrame, prijzen: pd.DataFrame, onbalans: pd.DataFrame | None) -> None:
+    """Toont de stroom per fase tegenover de hoofdzekering en wat load balancing doet.
+
+    ``onbalans`` is alleen gevuld als de batterij op de onbalansmarkt handelt;
+    de tweede simulatie (load balancing omgezet) heeft dezelfde prijzen nodig.
+    """
     cfg = uit.cfg
     k = uit.kentallen
     zekering = cfg.aansluiting.hoofdzekering_a
@@ -978,7 +1155,7 @@ def toon_fasen(uit: Uitkomst, weer: pd.DataFrame, prijzen: pd.DataFrame) -> None
         sleutel = ander.naar_json()
         if st.session_state.get("lb_json") != sleutel:
             with st.spinner("Tweede simulatie…"):
-                st.session_state["lb_uitkomst"] = voer_uit(ander, weer, prijzen)
+                st.session_state["lb_uitkomst"] = voer_uit(ander, weer, prijzen, onbalans)
                 st.session_state["lb_json"] = sleutel
         ak = st.session_state["lb_uitkomst"].kentallen
         aan, uitgezet = (k, ak) if cfg.aansluiting.loadbalancing_actief else (ak, k)
@@ -1185,6 +1362,16 @@ def toon_scenarios(cfg: Config, weer: pd.DataFrame, prijzen: pd.DataFrame) -> No
     met = [c for c in capaciteiten if c > 0]
     aantal = len(factoren) * (len(met) * len(topologieen) * len(koppelingen) * len(strategieen) + (1 if len(met) < len(capaciteiten) else 0))
     if st.button(f"{aantal} scenario's doorrekenen", type="primary", key="sc_start"):
+        # Onbalansprijzen zijn alleen nodig als die strategie is gekozen voor
+        # een scenario met batterij. Ontbreken ze, dan zegt de melding wat de
+        # gebruiker moet doen en wordt er niets doorgerekend.
+        onbalans = None
+        if "onbalans" in strategieen and met:
+            try:
+                onbalans = haal_onbalans(cfg.algemeen.jaar)
+            except OnbalansOntbreekt as fout:
+                st.error(str(fout))
+                return
         balk = st.progress(0.0, text="Scenario's doorrekenen…")
         st.session_state["scenario_tabel"] = vergelijk_scenarios(
             cfg.kopie(),
@@ -1196,6 +1383,7 @@ def toon_scenarios(cfg: Config, weer: pd.DataFrame, prijzen: pd.DataFrame) -> No
             koppelingen,
             strategieen,
             voortgang=lambda klaar, totaal: balk.progress(klaar / totaal, text=f"Scenario {klaar} van {totaal}"),
+            onbalans=onbalans,
         )
         st.session_state["scenario_jaren"] = cfg.investering.levensduur_jaren
         balk.empty()
@@ -1238,6 +1426,7 @@ def toon_scenarios(cfg: Config, weer: pd.DataFrame, prijzen: pd.DataFrame) -> No
             "Meerinvestering (€)": st.column_config.NumberColumn(format="%.0f", help=bij_uitkomst("meerinvestering")),
             "Terugverdientijd (jaar)": st.column_config.NumberColumn(format="%.1f", help=bij_uitkomst("terugverdientijd")),
             "Netto voordeel (€)": st.column_config.NumberColumn(format="%.0f", help=bij_uitkomst("netto_voordeel")),
+            "Dagen off-grid": st.column_config.NumberColumn(format="%d", help=bij_uitkomst("offgrid_dagen")),
             "Zelfvoorzienend (%)": st.column_config.NumberColumn(format="%.0f", help=bij_uitkomst("zelfvoorzienend")),
             "Eigen verbruik zon (%)": st.column_config.NumberColumn(format="%.0f", help=bij_uitkomst("eigen_verbruik")),
             "Afname (kWh)": st.column_config.NumberColumn(format="%.0f", help=bij_uitkomst("afname")),
@@ -1375,13 +1564,17 @@ def main() -> None:
         keuze(st, alg, "knmi_station", "KNMI-station", {nr: naam for nr, (naam, _, _) in KNMI_STATIONS.items()})
         keuze(st, alg, "tijdstap_min", "Tijdstap", {m: f"{m} min" for m in TIJDSTAPPEN_MIN})
         getal(st, alg, "seed", "Toevalsreeks", 1, 0)
-        start = st.button(
-            "Simulatie starten",
-            type="primary",
-            width="stretch",
-            help="Rekent het hele jaar opnieuw door met de instellingen van dit moment. Doe dit na elke wijziging; "
-            "de tabbladen met uitkomsten waarschuwen als ze nog bij oude instellingen horen.",
-        )
+        # De knoppen in de zijbalk hebben bewust GEEN uitleg achter de muis
+        # (``help``): de ballon kwam bij elke beweging naar een knop op en zat
+        # het klikken in de weg. De namen zeggen wat de knoppen doen; wat er
+        # gebeurd is, meldt de app eronder (zie ``meldingsplek``). De
+        # vraagtekens bij de invoervelden blijven: die verschijnen alleen op
+        # het vraagteken zelf, niet op het veld.
+        #
+        # Simulatie starten: rekent het hele jaar opnieuw door met de
+        # instellingen van dit moment. De tabbladen met uitkomsten waarschuwen
+        # als ze nog bij oude instellingen horen.
+        start = st.button("Simulatie starten", type="primary", width="stretch")
 
         st.divider()
         # Laden en opslaan gaan via de vensters van Windows en werken op een
@@ -1397,35 +1590,22 @@ def main() -> None:
         # plek; ze worden verderop gevuld, na het tabblad Instellingen. Pas dan
         # staat in ``cfg`` wat er in deze run in de velden is ingevuld.
         bestandsregel = st.empty()
-        laden = st.button(
-            "Instellingen laden…",
-            width="stretch",
-            help="Opent een eerder opgeslagen bestand met instellingen. Alle velden krijgen de waarden uit dat bestand. "
-            "Het venster om het bestand te kiezen opent over de browser heen.",
-        )
-        opslaan = st.button(
-            "Instellingen opslaan",
-            width="stretch",
-            help="Schrijft alle instellingen terug in het bestand waaruit je ze geladen hebt (of waarin je ze het laatst "
-            "hebt opgeslagen). Is er nog geen bestand, dan vraagt de app waar het moet komen. "
-            "De laatst gebruikte instellingen onthoudt de app ook zonder dat je dit doet.",
-        )
-        opslaan_als = st.button(
-            "Opslaan als…",
-            width="stretch",
-            help="Slaat alle instellingen op in een ander bestand, bijvoorbeeld om een variant te bewaren. "
-            "Daarna is dat het bestand waarin 'Instellingen opslaan' schrijft.",
-        )
+        # Laden: opent een eerder opgeslagen bestand; alle velden krijgen de
+        # waarden daaruit. Het venster opent over de browser heen.
+        laden = st.button("Instellingen laden…", width="stretch")
+        # Opslaan: schrijft terug in het bestand waarmee gewerkt wordt. Is er
+        # nog geen bestand, dan vraagt de app waar het moet komen.
+        opslaan = st.button("Instellingen opslaan", width="stretch")
+        # Opslaan als: kiest een ander bestand, bijvoorbeeld voor een variant.
+        # Daarna is dat het bestand waarin "Instellingen opslaan" schrijft.
+        opslaan_als = st.button("Opslaan als…", width="stretch")
         if laden:
             pad = _kies(kies_om_te_openen)
             if pad is not None and _laad_uit(pad):
                 st.rerun()
-        if st.button(
-            "Standaardinstellingen",
-            width="stretch",
-            help="Zet alle velden terug op de standaardwaarden van de app. Je eigen invoer gaat daarbij verloren, "
-            "tenzij je die eerst hebt opgeslagen. Het bestand zelf blijft ongemoeid.",
-        ):
+        # Standaardinstellingen: alle velden terug naar de standaardwaarden
+        # van de app. Het bestand op schijf blijft ongemoeid.
+        if st.button("Standaardinstellingen", width="stretch"):
             st.session_state["cfg"] = Config()
             st.session_state["generatie"] += 1
             # Het bestand loslaten: anders zou "Instellingen opslaan" de
@@ -1488,9 +1668,20 @@ def main() -> None:
         st.error(f"De data voor {cfg.algemeen.jaar} kon niet worden opgehaald: {fout}")
         return
 
+    # Handelt de batterij op de onbalansmarkt, dan zijn ook de onbalansprijzen
+    # nodig. Die haalt de app niet zelf op; ontbreken ze, dan staat in de
+    # melding wat de gebruiker moet doen (inlezen bij Batterij en omvormers).
+    onbalans = None
+    if handelt_op_onbalans(cfg):
+        try:
+            onbalans = haal_onbalans(cfg.algemeen.jaar)
+        except OnbalansOntbreekt as fout:
+            st.error(str(fout))
+            return
+
     if start or "uitkomst" not in st.session_state:
         with st.spinner("Simulatie draait…"):
-            st.session_state["uitkomst"] = voer_uit(cfg.kopie(), weer, prijzen)
+            st.session_state["uitkomst"] = voer_uit(cfg.kopie(), weer, prijzen, onbalans)
             st.session_state["referentie"] = voer_uit(zonder_batterij(cfg), weer, prijzen)
             st.session_state["uitkomst_json"] = nu_json
     uit: Uitkomst = st.session_state["uitkomst"]
@@ -1500,7 +1691,7 @@ def main() -> None:
     for tab, toon in (
         (tabs[1], lambda: toon_overzicht(uit, ref)),
         (tabs[2], lambda: toon_tijdverloop(uit)),
-        (tabs[3], lambda: toon_fasen(uit, weer, prijzen)),
+        (tabs[3], lambda: toon_fasen(uit, weer, prijzen, onbalans)),
         (tabs[4], lambda: toon_warmtepomp(uit)),
     ):
         with tab:

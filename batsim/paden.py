@@ -27,6 +27,22 @@ def is_programma() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
+def programmamap() -> Path:
+    """Geeft de map met wat bij het programma zelf hoort en alleen gelezen wordt.
+
+    Waarom naast ``gebruikersmap``:
+        Wat de app schrijft, hoort bij de gebruiker; wat met het programma
+        wordt meegeleverd (de onbalansprijzen in ``onbalans/``), hoort bij het
+        programma en wordt bij een nieuwe versie mee vervangen.
+
+    Returns:
+        Als script: de projectmap. Als Windows-programma: de map waarin
+        PyInstaller de meegeleverde bestanden zet (``sys._MEIPASS``; dezelfde
+        map waar ``main.py`` de app zelf vindt).
+    """
+    return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+
+
 def gebruikersmap() -> Path:
     """Geeft de map waarin de app data en instellingen bewaart.
 

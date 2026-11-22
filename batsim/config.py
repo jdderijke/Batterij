@@ -30,7 +30,11 @@ KNMI_STATIONS: dict[int, tuple[str, float, float]] = {
     240: ("Schiphol", 52.32, 4.79),
     260: ("De Bilt", 52.10, 5.18),
     269: ("Lelystad", 52.46, 5.52),
-    275: ("Deelen", 52.06, 5.87),
+    270: ("Leeuwarden", 53.22, 5.75),
+    # Deelen is ook het station voor Ede: het KNMI heeft daar zelf geen
+    # station, en Deelen ligt er ongeveer tien kilometer vandaan.
+    275: ("Deelen (bij Ede en Arnhem)", 52.06, 5.87),
+    278: ("Heino", 52.43, 6.26),
     280: ("Eelde (Groningen)", 53.12, 6.58),
     290: ("Twenthe", 52.27, 6.89),
     310: ("Vlissingen", 51.44, 3.60),
@@ -41,7 +45,9 @@ KNMI_STATIONS: dict[int, tuple[str, float, float]] = {
 }
 
 # Toegestane tijdstappen in minuten. Ze delen allemaal een uur precies, omdat
-# weer en prijzen per uur binnenkomen en het handelsplan per uur rekent.
+# weer en prijzen per uur binnenkomen en het handelsplan per uur rekent. De
+# onbalansmarkt rekent per kwartier; hoe dat op elke tijdstap past, staat bij
+# ``data.kwartier_naar_tijdstap`` en bij het handelsplan in ``simulatie``.
 TIJDSTAPPEN_MIN = (1, 5, 10, 15, 30, 60)
 
 # Keuzelijsten: sleutel (wat de code gebruikt) -> tekst (wat de app toont).
@@ -57,6 +63,11 @@ STRATEGIEEN = {
     "eigen_verbruik": "Eigen verbruik van zonne-energie",
     "piek_shaving": "Piek shaving",
     "handel": "Handel op uurprijzen",
+    # Zelfde idee als "handel", maar op de onbalansprijs van TenneT, die per
+    # kwartier verschilt en veel grilliger is dan de uurprijs. De naam noemt
+    # de afrekenmethode, omdat een particulier alleen via zo'n aanbieder op
+    # deze markt kan handelen (zie ``simulatie.bouw_profielen``).
+    "onbalans": "Handel op de onbalansmarkt (methode Zonneplan / Frank Energie)",
 }
 REGELINGEN = {
     "per_fase": "Per fase (elke fase apart naar nul)",
@@ -231,9 +242,14 @@ class Batterij:
     topologie: str = "1x3"
     koppeling: str = "ac"
     omvormer_kw_per_fase: float = 3.0
-    # Grootste laad- en ontlaadvermogen als deel van de capaciteit per uur
-    # (0,5 = in twee uur vol of leeg).
-    max_c_rate: float = 0.5
+    # Grootste laadvermogen en grootste ontlaadvermogen van de accu, elk als
+    # deel van de capaciteit per uur (0,5 C = in twee uur vol of leeg; 1 C =
+    # in één uur). Twee velden en niet één: veel accu's mogen sneller ontladen
+    # dan laden, en bij handel bepaalt juist dat verschil wat er te verdienen
+    # valt. Tot versie 0.2 was dit één veld, ``max_c_rate``; een oud bewaard
+    # bestand wordt in ``Config.uit_dict`` omgezet.
+    max_laad_c_rate: float = 0.5
+    max_ontlaad_c_rate: float = 0.5
     min_soc_pct: float = 10.0
     max_soc_pct: float = 100.0
     start_soc_pct: float = 50.0
@@ -249,9 +265,13 @@ class Batterij:
     # Piek shaving: batterij bijladen uit het net zolang de afname onder de
     # grens blijft. Uit: alleen laden met zonne-overschot.
     herladen_uit_net: bool = True
-    # Handel: kosten van slijtage per kWh die door de batterij gaat. Een cyclus
-    # wordt alleen gepland als het prijsverschil dit goedmaakt.
+    # Handel (op uurprijzen en op de onbalansmarkt): kosten van slijtage per
+    # kWh die door de batterij gaat. Een cyclus wordt alleen gepland als het
+    # prijsverschil dit goedmaakt.
     slijtage_eur_per_kwh: float = 0.03
+    # Handel op de onbalansmarkt: het deel van het handelsresultaat dat de
+    # aanbieder aan de klant uitkeert. Frank Energie noemt ongeveer 85%.
+    onbalans_klantdeel: float = 0.85
     # Netcongestie: de batterij laadt bij om de spanning op de aansluiting
     # onder de uitschakelspanning van de panelen te houden. Werkt naast elke
     # strategie en alleen als netcongestie als storing is aangezet.
@@ -436,6 +456,17 @@ class Config:
     @classmethod
     def uit_dict(cls, gegevens: dict) -> "Config":
         """Bouwt een instelling uit een dict; ontbrekende velden krijgen de standaard."""
+        # Oude bestanden (tot versie 0.2) hebben één C-snelheid voor laden en
+        # ontladen samen. Die waarde geldt dan voor allebei; zonder deze stap
+        # zou een bewaarde 1 C stilletjes terugvallen op de standaard 0,5 C.
+        # De dict van de aanroeper blijft ongemoeid: er wordt een kopie gevuld.
+        batterij = gegevens.get("batterij") if isinstance(gegevens, dict) else None
+        if isinstance(batterij, dict) and "max_c_rate" in batterij:
+            batterij = dict(batterij)
+            oud = batterij.pop("max_c_rate")
+            batterij.setdefault("max_laad_c_rate", oud)
+            batterij.setdefault("max_ontlaad_c_rate", oud)
+            gegevens = {**gegevens, "batterij": batterij}
         return _uit_dict(cls, gegevens)
 
     def kopie(self) -> "Config":

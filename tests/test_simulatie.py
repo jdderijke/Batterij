@@ -16,6 +16,7 @@ import pytest
 
 from batsim.belasting import apparaat_kwh_per_jaar, basislast_kwh_per_jaar, huishoud_profiel
 from batsim.config import Apparaat, Config, Huishouden
+from batsim.data import importeer_onbalans, kwartier_naar_tijdstap
 from batsim.huis import warmteverlies_w_per_k
 from batsim.resultaat import in_bezit, investering
 from batsim.simulatie import plan_handel, voer_uit, zonder_batterij
@@ -172,7 +173,8 @@ def test_handelsplan_koopt_laag_en_verkoopt_hoog():
         energie_nu=0.0,
         energie_min=0.0,
         energie_max=10.0,
-        vermogen_max_kw=10.0,
+        laden_max_kw=10.0,
+        ontladen_max_kw=10.0,
         rendement_enkel=0.95,
         slijtage_eur_per_kwh=0.02,
         netto_kwh=np.zeros(5),
@@ -189,8 +191,208 @@ def test_handelsplan_doet_niets_bij_vlakke_prijs():
     De batterij begint leeg: energie die er al in zit, verkoopt het plan wel,
     omdat ze aan het eind van de planperiode niets meer waard is.
     """
-    plan = plan_handel(0.0, 0.0, 10.0, 5.0, 0.95, 0.02, np.zeros(6), np.full(6, 0.25), np.full(6, 0.25))
+    plan = plan_handel(0.0, 0.0, 10.0, 5.0, 5.0, 0.95, 0.02, np.zeros(6), np.full(6, 0.25), np.full(6, 0.25))
     assert np.allclose(plan, 0.0)
+
+
+def test_handelsplan_laad_en_ontlaadvermogen_apart():
+    """Laden en ontladen hebben elk hun eigen grens (de twee C-snelheden)."""
+    koop = np.array([0.05, 0.05, 0.05, 0.05, 0.60, 0.60])
+    plan = plan_handel(0.0, 0.0, 10.0, 2.0, 8.0, 0.95, 0.0, np.zeros(6), koop, koop)
+    assert plan.min() >= -2.0 - 1e-9  # laden met hooguit 2 kW
+    assert plan.max() <= 8.0 + 1e-9  # ontladen met hooguit 8 kW
+    assert plan.max() > 2.0  # en de ruimte boven 2 kW wordt ook gebruikt
+
+
+def test_handelsplan_per_kwartier_en_binnen_de_aansluiting():
+    """Het plan rekent ook per kwartier en blijft dan binnen de hoofdaansluiting."""
+    koop = np.array([0.30, -0.20, 0.30, 0.90, 0.30, 0.30, 0.30, 0.30])
+    # Het huis neemt zelf al 3 kW af; de aansluiting kan 5 kW aan.
+    netto = np.full(8, 3.0 * 0.25)
+    plan = plan_handel(
+        0.0, 0.0, 10.0, 10.0, 10.0, 0.95, 0.0, netto, koop, koop, duur_h=0.25, net_max_kw=5.0, niveaus=81
+    )
+    assert plan[1] < 0  # laden in het kwartier met de negatieve prijs
+    assert plan[3] > 0  # ontladen in het dure kwartier
+    # Laden mag de afname niet boven 5 kW brengen: hooguit 2 kW laden.
+    assert plan.min() >= -2.0 - 1e-9
+    # Ontladen mag de teruglevering niet boven 5 kW brengen: hooguit 8 kW.
+    assert plan.max() <= 8.0 + 1e-9
+
+
+def _nep_onbalans(prijzen: pd.DataFrame) -> pd.DataFrame:
+    """Maakt kwartierprijzen bij ``_nepdata``: elk uur een goedkoop en een duur kwartier."""
+    kwartieren = pd.date_range(prijzen.index[0], periods=len(prijzen) * 4, freq="15min", tz="UTC")
+    # Kwartier 0 van elk uur is spotgoedkoop, kwartier 2 peperduur.
+    patroon = np.tile([-0.10, 0.08, 0.60, 0.08], len(prijzen))
+    return pd.DataFrame({"afnemen_eur_kwh": patroon, "invoeden_eur_kwh": patroon}, index=kwartieren)
+
+
+@pytest.mark.parametrize("tijdstap_min", [5, 15, 60])
+def test_onbalans_handel(tijdstap_min):
+    """Handel op de onbalansmarkt verdient aan de kwartierprijzen en respecteert de aansluiting.
+
+    Bij een stap van 60 minuten zijn de kwartierprijzen tot één uurprijs
+    gemiddeld en valt er in dit patroon niets te verdienen; de simulatie moet
+    dan wel gewoon draaien.
+    """
+    weer, prijzen = _nepdata(dagen=4)
+    onbalans = _nep_onbalans(prijzen)
+    cfg = _cfg(strategie="onbalans", slijtage_eur_per_kwh=0.0, max_laad_c_rate=1.0, max_ontlaad_c_rate=1.0)
+    cfg.algemeen.tijdstap_min = tijdstap_min
+    cfg.auto.aanwezig = False
+    cfg.tarieven.salderen = True
+    cfg.aansluiting.hoofdzekering_a = 16.0
+    uit = voer_uit(cfg, weer, prijzen, onbalans)
+    r = uit.reeksen
+
+    # De laadtoestand blijft binnen de grenzen en de zekering wordt niet
+    # overschreden, ook al zou de handel liever harder gaan.
+    assert r["soc"].min() >= cfg.batterij.min_soc_pct - 1e-6
+    assert r["soc"].max() <= cfg.batterij.max_soc_pct + 1e-6
+    assert max(uit.kentallen["max_stroom_a"]) <= 16.0 + 1e-6
+
+    if tijdstap_min <= 15:
+        # De handel levert geld op: er is een positief handelsresultaat, en
+        # de kosten liggen lager dan zonder batterij.
+        zonder = voer_uit(zonder_batterij(cfg), weer, prijzen).kentallen
+        assert uit.kentallen["handelsresultaat_eur"] > 0
+        assert uit.kentallen["kosten_eur"] < zonder["kosten_eur"]
+        assert uit.kentallen["cycli"] > 1
+
+        # De afrekening: de meter tegen de uurprijs, min het handelsresultaat.
+        meter = np.where(r["net"] > 0, r["net"] * r["koop"], r["net"] * r["verkoop"]) * uit.profielen.basis.dt_h
+        assert np.allclose(r["kosten"], meter - r["handel"])
+
+        # Krijgt de klant een kleiner deel, dan levert het ook minder op.
+        cfg.batterij.onbalans_klantdeel = 0.5
+        minder = voer_uit(cfg, weer, prijzen, onbalans).kentallen
+        assert minder["handelsresultaat_eur"] < uit.kentallen["handelsresultaat_eur"]
+        assert minder["kosten_eur"] > uit.kentallen["kosten_eur"]
+
+
+def test_onbalans_vraagt_om_prijzen():
+    """Zonder onbalansprijzen is de strategie niet te rekenen; zonder batterij zijn ze niet nodig."""
+    weer, prijzen = _nepdata(dagen=2)
+    cfg = _cfg(strategie="onbalans")
+    with pytest.raises(ValueError):
+        voer_uit(cfg, weer, prijzen)
+    # De referentie zonder batterij rekent op het gewone contract af.
+    voer_uit(zonder_batterij(cfg), weer, prijzen)
+
+
+def test_kwartierprijzen_naar_tijdstap():
+    """Elk kwartier houdt zijn prijs bij fijne stappen; grove stappen middelen."""
+    kwartier = np.array([1.0, 2.0, 3.0, 4.0])
+    assert kwartier_naar_tijdstap(kwartier, 15).tolist() == [1.0, 2.0, 3.0, 4.0]
+    assert kwartier_naar_tijdstap(kwartier, 5).tolist() == [1.0] * 3 + [2.0] * 3 + [3.0] * 3 + [4.0] * 3
+    assert kwartier_naar_tijdstap(kwartier, 30).tolist() == [1.5, 3.5]
+    assert kwartier_naar_tijdstap(kwartier, 60).tolist() == [2.5]
+    # 10 minuten deelt een kwartier niet: de middelste stap ligt half in elk.
+    assert kwartier_naar_tijdstap(kwartier, 10).tolist() == pytest.approx([1.0, 1.5, 2.0, 3.0, 3.5, 4.0])
+
+
+def test_onbalansbestand_inlezen(tmp_path, monkeypatch):
+    """Een CSV in het formaat van TenneT komt op het UTC-kwartierraster van het jaar.
+
+    Het formaat volgt de documentatie van TenneT (kolomnamen, lokale tijd,
+    EUR/MWh). De wissel naar wintertijd is de lastige dag: die heeft 100
+    kwartieren en de kloktijd is er dubbelzinnig.
+    """
+    import batsim.data as data
+
+    monkeypatch.setattr(data, "DATA_MAP", tmp_path)
+    lokaal = pd.date_range("2024-01-01", "2024-12-31 23:45", freq="15min", tz="Europe/Amsterdam")
+    datum = lokaal.tz_localize(None).normalize()
+    isp = pd.Series(1, index=range(len(lokaal))).groupby(datum).cumsum().to_numpy()
+    prijs = np.arange(len(lokaal), dtype=float)
+    bestand = tmp_path / "settlement.csv"
+    pd.DataFrame(
+        {
+            "Timeinterval Start Loc": lokaal.strftime("%Y-%m-%dT%H:%M"),
+            "Isp": isp,
+            "Price Shortage": prijs,
+            "Price Surplus": prijs - 10.0,
+        }
+    ).to_csv(bestand, index=False)
+
+    tabel = importeer_onbalans(bestand, 2024)
+    assert len(tabel) == 366 * 96
+    assert str(tabel.index[0]) == "2024-01-01 00:00:00+00:00"
+    # Lokaal 1 januari 00:00 is 31 december 23:00 UTC; UTC 00:00 is dus het
+    # vijfde kwartier van het bestand. EUR/MWh wordt EUR/kWh.
+    assert tabel["afnemen_eur_kwh"].iloc[0] == pytest.approx(4.0 / 1000.0)
+    assert tabel["invoeden_eur_kwh"].iloc[0] == pytest.approx((4.0 - 10.0) / 1000.0)
+    # Over de hele reeks, dus ook over beide klokwissels, loopt de prijs
+    # gewoon door: elk kwartier staat op zijn eigen plek.
+    stappen = np.diff(tabel["afnemen_eur_kwh"].to_numpy()[:-4]) * 1000.0
+    assert np.allclose(stappen, 1.0)
+    assert data.laad_onbalans(2024).shape == tabel.shape
+
+
+@pytest.mark.parametrize("jaar", [2021, 2022, 2023, 2024, 2025])
+def test_meegeleverde_onbalansprijzen(jaar, tmp_path, monkeypatch):
+    """De meegeleverde bestanden van TenneT zijn voor elk jaar in te lezen.
+
+    Elk kwartier van het jaar heeft een prijs, en de bedragen hebben de orde
+    van grootte van euro's per kWh (dus niet per MWh, en niet met een
+    verkeerd gelezen decimaalteken).
+    """
+    import batsim.data as data
+
+    # De omgezette tabel gaat naar een tijdelijke map, niet naar ``data/``.
+    monkeypatch.setattr(data, "DATA_MAP", tmp_path)
+    assert data.onbalans_beschikbaar(jaar)
+    tabel = data.laad_onbalans(jaar)
+    assert len(tabel) == len(data.kwartieren_van_jaar(jaar))
+    assert not tabel.isna().any().any()
+    assert -0.5 < tabel["afnemen_eur_kwh"].mean() < 0.5
+    assert tabel["afnemen_eur_kwh"].abs().max() < 10.0
+    # Afnemen kost nooit minder dan invoeden oplevert (de dubbele prijs).
+    assert (tabel["afnemen_eur_kwh"] >= tabel["invoeden_eur_kwh"] - 1e-9).mean() > 0.99
+
+
+def test_offgrid_dagen():
+    """Een dag telt als off-grid als er niets uit het net kwam; een grotere batterij geeft er meer."""
+    from batsim.resultaat import offgrid_dagen
+
+    # Vier dagen van 24 uur: geen afname, alleen teruglevering, een beetje
+    # afname, en weer geen afname.
+    dag_nr = np.repeat(np.arange(4), 24)
+    net = np.zeros(96)
+    net[24:48] = -2.0
+    net[60] = 1.0
+    assert offgrid_dagen(dag_nr, net, 1.0) == (3, 2)
+
+    weer, prijzen = _nepdata()
+    cfg = _cfg(strategie="eigen_verbruik", capaciteit_kwh=40.0, omvormer_kw_per_fase=5.0)
+    cfg.auto.aanwezig = False
+    groot = voer_uit(cfg, weer, prijzen).kentallen
+    zonder = voer_uit(zonder_batterij(cfg), weer, prijzen).kentallen
+    assert zonder["offgrid_dagen"] == 0
+    assert groot["offgrid_dagen"] > 0
+    assert groot["offgrid_langste_reeks"] <= groot["offgrid_dagen"]
+
+
+def test_oud_bestand_met_een_c_snelheid():
+    """Een bestand van voor de splitsing geeft zijn ene C-snelheid aan laden en ontladen."""
+    oud = Config().naar_dict()
+    del oud["batterij"]["max_laad_c_rate"]
+    del oud["batterij"]["max_ontlaad_c_rate"]
+    oud["batterij"]["max_c_rate"] = 1.0
+    cfg = Config.uit_dict(oud)
+    assert cfg.batterij.max_laad_c_rate == 1.0
+    assert cfg.batterij.max_ontlaad_c_rate == 1.0
+
+
+def test_ontlaadsnelheid_begrenst_het_ontladen():
+    """Met een lage ontlaadsnelheid levert de batterij minder vermogen dan ze laadt."""
+    weer, prijzen = _nepdata()
+    cfg = _cfg(strategie="eigen_verbruik", max_laad_c_rate=1.0, max_ontlaad_c_rate=0.1)
+    r = voer_uit(cfg, weer, prijzen).reeksen
+    # ``batterij`` is het vermogen aan de DC-kant: positief = ontladen.
+    assert r["batterij"].max() <= 0.1 * cfg.batterij.capaciteit_kwh + 1e-6
+    assert -r["batterij"].min() > 0.1 * cfg.batterij.capaciteit_kwh
 
 
 def test_zonder_zonnepanelen_is_er_geen_zon():

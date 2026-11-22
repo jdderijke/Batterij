@@ -60,6 +60,10 @@ def _vrije_poort(eerste: int = 8501, pogingen: int = 50) -> int:
         poort, maar vertelt dat alleen in zijn uitvoer. Draait er al een
         exemplaar (of een ander programma) op 8501, dan komt dit exemplaar
         ernaast op 8502.
+
+        Ook het script gebruikt deze functie (zie ``_opties_script``): de
+        eigen controle van Streamlit ziet een Windows-programma dat al draait
+        niet.
     """
     for poort in range(eerste, eerste + pogingen):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -143,13 +147,38 @@ def _opties_programma() -> list[str]:
     ]
 
 
+def _opties_script() -> list[str]:
+    """Geeft de extra Streamlit-opties voor het draaien als script: een vrije poort.
+
+    Waarom dit bestaat:
+        Als script luistert Streamlit op alle netwerkaansluitingen, het
+        Windows-programma alleen op 127.0.0.1 (zie ``_opties_programma``).
+        Windows staat die twee naast elkaar toe op dezelfde poort, dus
+        Streamlit merkt niet dat 8501 al bezet is als het programma draait.
+        De browser op ``localhost:8501`` komt dan bij het programma uit: je
+        start de nieuwe code en kijkt naar de oude versie, zonder melding.
+        Daarom zoekt ook het script zelf eerst een vrije poort; Streamlit
+        opent de browser dan op die poort.
+
+        Wie zelf een poort meegeeft (``python main.py --server.port 8600``),
+        krijgt die: dan komt er hier niets bij.
+
+    Afgewezen: als script ook alleen op 127.0.0.1 luisteren. Dan ziet
+    Streamlit de bezette poort wel, maar is de app niet meer vanaf een ander
+    apparaat te bekijken, en dat is als script juist soms handig.
+    """
+    if any(optie.startswith("--server.port") for optie in sys.argv[1:]):
+        return []
+    return [f"--server.port={_vrije_poort()}"]
+
+
 def main() -> None:
     """Start Streamlit met ``app.py``, alsof ``streamlit run app.py`` is ingetypt."""
     # Streamlit zoekt zijn instellingen (.streamlit/config.toml) in de
     # werkmap. Door naar de map van app.py te gaan, worden ze altijd gevonden,
     # ook als het script vanuit een andere map is gestart.
     os.chdir(BRON)
-    extra = _opties_programma() if is_programma() else []
+    extra = _opties_programma() if is_programma() else _opties_script()
     # Streamlit leest zijn opdracht uit sys.argv. Wat de gebruiker achter
     # ``python main.py`` typt (bijvoorbeeld ``--server.port 8600``) gaat
     # ongewijzigd door naar Streamlit en wint van de opties hierboven.

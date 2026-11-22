@@ -46,6 +46,9 @@ datas = [
     # De app zelf en de Streamlit-instellingen, naast elkaar in de programmamap.
     ("app.py", "."),
     (".streamlit/config.toml", ".streamlit"),
+    # De meegeleverde onbalansprijzen van TenneT, één bestand per jaar (zie
+    # batsim/data.py). Een nieuw jaar in de map gaat vanzelf mee.
+    ("onbalans/*.csv", "onbalans"),
     *st_data,
     *collect_data_files("plotly"),
     # Pakketten die bij het starten hun eigen versie opvragen.

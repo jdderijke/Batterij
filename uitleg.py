@@ -496,13 +496,23 @@ VELDEN: dict[str, str] = {
         "Bij een te kleine omvormer kan de batterij een kookplaat of laadpaal niet bijbenen en komt de rest toch uit het net. "
         "Bij een hybride opstelling loopt ook de zonnestroom naar huis en net door deze omvormer; is hij te klein, dan gaat er zonnestroom verloren.",
     ),
-    "Batterij.max_c_rate": _veld(
-        "Hoe snel de accu zelf mag laden en ontladen, uitgedrukt als deel van de capaciteit per uur. "
-        "Bij 0,5 C is een accu van 15 kWh begrensd op 7,5 kW en duurt volledig laden minstens twee uur.",
-        "0,3 tot 1,0. De meeste thuisbatterijen (LFP) mogen 0,5 C; sommige 1 C. Het staat in de specificaties als "
-        "'maximaal laad- en ontlaadvermogen' of 'C-rate'.",
-        "Het werkelijke vermogen is het laagste van deze grens en dat van de omvormers. "
-        "Bij een kleine batterij met grote omvormers is dit de beperking; bij een grote batterij zijn dat de omvormers.",
+    "Batterij.max_laad_c_rate": _veld(
+        "Hoe snel de accu zelf mag LADEN, uitgedrukt in C: het deel van de capaciteit per uur. "
+        "Bij 0,5 C is een accu van 15 kWh begrensd op 7,5 kW en duurt volledig laden minstens twee uur; bij 1 C is dat 15 kW en één uur.",
+        "0,3 tot 1,0. De meeste thuisbatterijen (LFP) mogen met 0,5 C laden; sommige met 1 C. Het staat in de specificaties als "
+        "'maximaal laadvermogen' of 'C-rate (charge)'.",
+        "Het werkelijke laadvermogen is het laagste van deze grens en dat van de omvormers. "
+        "Bij een kleine batterij met grote omvormers is dit de beperking; bij een grote batterij zijn dat de omvormers. "
+        "Bij handel bepaalt het hoeveel de batterij in een goedkoop uur of kwartier kan inkopen.",
+    ),
+    "Batterij.max_ontlaad_c_rate": _veld(
+        "Hoe snel de accu zelf mag ONTLADEN, uitgedrukt in C: het deel van de capaciteit per uur. "
+        "Bij 1 C mag een accu van 15 kWh 15 kW leveren en is ze op vol vermogen in één uur leeg; bij 0,5 C is dat 7,5 kW en twee uur.",
+        "0,5 tot 1,0. Veel accu's mogen sneller ontladen dan laden; daarom is dit een apart veld. Het staat in de specificaties als "
+        "'maximaal ontlaadvermogen' of 'C-rate (discharge)'. Weet je alleen één waarde, vul die dan bij beide in.",
+        "Het werkelijke ontlaadvermogen is het laagste van deze grens en dat van de omvormers. "
+        "Het bepaalt of de batterij een zware verbruiker (kookplaat, laadpaal) kan bijbenen, "
+        "en bij handel hoeveel ze in een duur uur of kwartier kan verkopen.",
     ),
     "Batterij.standby_w_per_omvormer": _veld(
         "De stroom die elke omvormer verbruikt om aan te staan, ook als de batterij niets doet. Er zijn drie omvormers, het hele jaar door.",
@@ -552,10 +562,25 @@ VELDEN: dict[str, str] = {
         "Het doel waarvoor de batterij wordt ingezet. Ze kan maar één ding tegelijk nastreven.",
         "'Eigen verbruik': zonnestroom die je overhoudt opslaan en 's avonds en 's nachts gebruiken. De eenvoudigste en meest gebruikte keuze. "
         "'Piek shaving': de batterij springt alleen bij als je afname boven een grens komt, om hoge pieken af te vlakken. "
-        "'Handel op uurprijzen': laden als stroom goedkoop is en ontladen als ze duur is; alleen zinvol met een dynamisch contract.",
+        "'Handel op uurprijzen': laden als stroom goedkoop is en ontladen als ze duur is; alleen zinvol met een dynamisch contract. "
+        "'Handel op de onbalansmarkt': hetzelfde, maar per kwartier tegen de onbalansprijs van TenneT. Die prijs is wat het kost om het "
+        "landelijke net in balans te houden; hij schiet veel verder uit dan de uurprijs. In de praktijk loopt dit via een partij die je "
+        "batterij aanstuurt. Hiervoor lees je één keer per jaar een bestand met onbalansprijzen in.",
         "Op alles wat de batterij doet, en dus op de stroomkosten en het aantal cycli. In Nederland betaal je als huishouden (nog) niet "
         "voor je piekvermogen; piek shaving bespaart daarom meestal weinig. Handel wordt gerekend met een perfecte voorspelling "
-        "en is dus een bovengrens van wat haalbaar is.",
+        "en is dus een bovengrens van wat haalbaar is. Voor de onbalansmarkt geldt dat nog sterker: die prijs is vooraf niet bekend. "
+        "Bij die keuze rekent de simulatie af zoals Frank Energie en Zonneplan: je meter op de uurprijs van een dynamisch contract "
+        "(ook als je bij Tarieven 'vast' hebt gekozen) en daarnaast een uitgekeerd handelsresultaat.",
+    ),
+    "Batterij.onbalans_klantdeel": _veld(
+        "Alleen bij handel op de onbalansmarkt. De partij die je batterij aanstuurt houdt een deel van wat de handel oplevert, "
+        "voor haar kosten. Dit is het deel dat jij krijgt. Het gaat om het handelsresultaat: de stroom van de batterij maal het verschil "
+        "tussen de onbalansprijs en de uurprijs. De uurprijs zelf staat al op je gewone energierekening.",
+        "Een getal van 0 tot 1. Frank Energie noemt ongeveer 0,85 (zij houden ongeveer 15%). Zonneplan noemt een 'handling fee' zonder "
+        "bedrag; kijk in je eigen overzicht of contract. Met 1 zie je wat de markt zelf oplevert, zonder aanbieder.",
+        "Rechtstreeks op wat handel op de onbalansmarkt oplevert, en ook op wat de batterij doet: bij een lager deel loont een klein "
+        "prijsverschil niet meer en handelt ze minder. De aanbieders geven geen openbare rekenformule; dit is de eenvoudigste lezing "
+        "van wat ze wel beschrijven.",
     ),
     "Batterij.regeling": _veld(
         "Hoe de batterij haar vermogen over de drie fasen verdeelt. Je elektriciteitsmeter telt de drie fasen bij elkaar op: "
@@ -581,7 +606,7 @@ VELDEN: dict[str, str] = {
         "Met 'uit' staat ze in de winter vaak leeg.",
     ),
     "Batterij.slijtage_eur_per_kwh": _veld(
-        "Alleen bij handel. Elke keer dat de batterij laadt en ontlaadt, slijt ze een beetje. "
+        "Alleen bij handel (op uurprijzen of op de onbalansmarkt). Elke keer dat de batterij laadt en ontlaadt, slijt ze een beetje. "
         "Dit bedrag is wat die slijtage kost per kWh die door de batterij gaat.",
         "0,02 tot 0,08 euro per kWh. Zelf uitrekenen: de prijs van de batterij gedeeld door alle kWh's die ze in haar leven verwerkt. "
         "Een batterij van 350 euro per kWh die 6.000 cycli meegaat, komt op ongeveer 0,06. Met 0 handelt de batterij op elk klein prijsverschil.",
@@ -919,7 +944,7 @@ VELDEN: dict[str, str] = {
         "Elke keuze verdubbelt het aantal scenario's met een batterij. De investering verschilt per keuze.",
     ),
     "Scenario.strategieen": _veld(
-        "Voor welk doel de batterij wordt ingezet: eigen verbruik, piek shaving of handel.",
+        "Voor welk doel de batterij wordt ingezet: eigen verbruik, piek shaving, handel op uurprijzen of handel op de onbalansmarkt.",
         "Kies er één of meer. Zie de uitleg bij 'Strategie' op het tabblad Instellingen.",
         "Elke keuze vermenigvuldigt het aantal scenario's met een batterij. Handel rekent het langst.",
     ),
@@ -956,6 +981,24 @@ UITKOMSTEN: dict[str, str] = {
         "Hoger betekent minder afhankelijk van het net. Met alleen panelen is 25 tot 35% gewoon; met een batterij 50 tot 70%. "
         "100% is in Nederland niet haalbaar, omdat de zon in de winter te weinig levert. " + _VERSCHIL + " "
         "Bij handel zegt dit getal minder, omdat de batterij dan ook uit het net laadt.",
+    ),
+    "offgrid_dagen": _uitkomst(
+        "Het aantal dagen waarop je huis zonder het net had gekund: de hele dag, van middernacht tot middernacht, "
+        "waren zonnepanelen en batterij samen genoeg voor al het verbruik en is er niets uit het net afgenomen. "
+        "Terugleveren mag op zo'n dag wel; zonder net zouden de panelen dan terugregelen.",
+        f"dagen, geteld {_JAAR}. Een dag telt mee als er hooguit 0,05 kWh uit het net kwam. "
+        "In de scenariotabel staat hetzelfde getal per scenario.",
+        "Hoger is onafhankelijker. Het is de maat voor wie niet (alleen) op de terugverdientijd let, maar los wil komen van het net. "
+        "In de zomer zijn het er veel, in de winter weinig of geen: een hele winter overbruggen vraagt veel meer panelen en opslag "
+        "dan een zomernacht. Het getal is bedoeld voor de strategie 'eigen verbruik'; bij handel en piek shaving laadt de batterij "
+        "ook uit het net en zegt het weinig. Het is een indicatie: echt los van het net vraagt een omvormer die zelf een net kan vormen. "
+        + _VERSCHIL,
+    ),
+    "offgrid_reeks": _uitkomst(
+        "De langste aaneengesloten periode van dagen waarop je huis zonder het net had gekund (zie 'Dagen off-grid mogelijk').",
+        f"dagen achter elkaar, {_JAAR}.",
+        "Dit zegt hoe lang je in het gunstigste deel van het jaar onafgebroken zonder net kunt. Eén bewolkte dag of één keer de auto "
+        "vol laden kan een lange reeks breken; een grotere batterij overbrugt zulke dagen. " + _VERSCHIL,
     ),
     "eigen_verbruik": _uitkomst(
         "Welk deel van je eigen zonnestroom je zelf hebt gebruikt (direct of via de batterij) in plaats van teruggeleverd.",

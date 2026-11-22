@@ -34,6 +34,8 @@ from pathlib import Path
 # Welke bestanden de vensters tonen: paren van omschrijving en patroon,
 # gescheiden door nultekens, zoals Windows het vraagt.
 _FILTER = "Instellingen (*.json)\0*.json\0Alle bestanden (*.*)\0*.*\0"
+# Hetzelfde voor het venster waarmee een CSV met onbalansprijzen wordt gekozen.
+_FILTER_CSV = "CSV-bestanden (*.csv)\0*.csv\0Alle bestanden (*.*)\0*.*\0"
 # Windows-paden kunnen tot 32.767 tekens lang zijn.
 _MAX_PAD = 32768
 
@@ -48,7 +50,9 @@ _BESTAND_MOET_BESTAAN = 0x00001000
 _MODERN_VENSTER = 0x00080000
 
 
-def _venster(opslaan: bool, titel: str, beginmap: Path | None, naam: str) -> Path | None:
+def _venster(
+    opslaan: bool, titel: str, beginmap: Path | None, naam: str, filter_: str = _FILTER, extensie: str = "json"
+) -> Path | None:
     """Toont het venster van Windows en geeft het gekozen pad, of ``None`` bij annuleren.
 
     Args:
@@ -57,6 +61,8 @@ def _venster(opslaan: bool, titel: str, beginmap: Path | None, naam: str) -> Pat
         beginmap: map waarin het venster opent; ``None`` laat Windows kiezen
             (de laatst gebruikte map).
         naam: bestandsnaam die alvast is ingevuld.
+        filter_: welke bestanden het venster toont (zie ``_FILTER``).
+        extensie: de extensie die een naam zonder extensie krijgt.
     """
     if sys.platform != "win32":
         raise NotImplementedError("Bestanden kiezen kan alleen op Windows.")
@@ -97,7 +103,7 @@ def _venster(opslaan: bool, titel: str, beginmap: Path | None, naam: str) -> Pat
     # Het filter bevat nultekens en kan daardoor niet als gewone tekst worden
     # doorgegeven; een buffer kan dat wel. In dezelfde soort buffer schrijft
     # Windows het gekozen pad terug.
-    filterbuffer = ctypes.create_unicode_buffer(_FILTER + "\0")
+    filterbuffer = ctypes.create_unicode_buffer(filter_ + "\0")
     padbuffer = ctypes.create_unicode_buffer(naam, _MAX_PAD)
 
     invoer = Invoer()
@@ -112,8 +118,8 @@ def _venster(opslaan: bool, titel: str, beginmap: Path | None, naam: str) -> Pat
     invoer.nMaxFile = _MAX_PAD
     invoer.lpstrInitialDir = str(beginmap) if beginmap else None
     invoer.lpstrTitle = titel
-    # Wie een naam zonder extensie typt, krijgt er .json achter.
-    invoer.lpstrDefExt = "json"
+    # Wie een naam zonder extensie typt, krijgt de extensie erachter.
+    invoer.lpstrDefExt = extensie
     invoer.Flags = _MODERN_VENSTER | _WERKMAP_LATEN_STAAN | _VERBERG_ALLEEN_LEZEN | _MAP_MOET_BESTAAN
     invoer.Flags |= _VRAAG_BIJ_OVERSCHRIJVEN if opslaan else _BESTAND_MOET_BESTAAN
 
@@ -144,6 +150,22 @@ def kies_om_te_openen(beginmap: Path | None = None) -> Path | None:
         NotImplementedError: op een ander systeem dan Windows.
     """
     return _venster(False, "Instellingen laden", beginmap, "")
+
+
+def kies_csv_om_te_openen(beginmap: Path | None = None) -> Path | None:
+    """Laat de gebruiker een CSV-bestand kiezen (de onbalansprijzen van TenneT).
+
+    Hetzelfde venster als ``kies_om_te_openen``, met een ander filter: de
+    onbalansprijzen zijn niet automatisch op te halen en komen daarom als
+    bestand binnen (zie ``batsim/data.py``).
+
+    Returns:
+        Het gekozen pad, of ``None`` als de gebruiker annuleert.
+
+    Raises:
+        NotImplementedError: op een ander systeem dan Windows.
+    """
+    return _venster(False, "Onbalansprijzen inlezen", beginmap, "", _FILTER_CSV, "csv")
 
 
 def kies_om_op_te_slaan(beginmap: Path | None = None, naam: str = "batterij-instellingen.json") -> Path | None:

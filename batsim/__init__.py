@@ -8,7 +8,8 @@ Waarom dit bestaat:
 
 Opbouw (elke module heeft één onderwerp):
     config      alle instellingen, als dataclasses met standaardwaarden
-    data        KNMI-weer en day-ahead-prijzen ophalen en lokaal bewaren
+    data        KNMI-weer en day-ahead-prijzen ophalen en lokaal bewaren;
+                onbalansprijzen van TenneT inlezen
     zon         zonopbrengst uit KNMI-straling
     huis        warmtevraag van het huis en de warmtepomp
     belasting   huishoudelijke apparaten die aan- en afschakelen
@@ -18,4 +19,4 @@ Opbouw (elke module heeft één onderwerp):
 """
 
 # De codeversie staat alleen hier; de app toont haar in de zijbalk.
-VERSION = "0.2.0"
+VERSION = "0.3.0"

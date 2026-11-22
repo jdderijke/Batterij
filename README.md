@@ -36,12 +36,33 @@ loopt. Dezelfde berekening draait ook een keer **zonder batterij**; het
 verschil tussen die twee is wat de batterij oplevert.
 
 **Echte data.** Temperatuur en zonnestraling komen uit de uurgegevens van het
-[KNMI](https://www.daggegevens.knmi.nl/klimatologie/uurgegevens) (twaalf
+[KNMI](https://www.daggegevens.knmi.nl/klimatologie/uurgegevens) (veertien
 stations, 2019 tot en met vorig jaar). De uurprijzen komen van de
 day-ahead-markt voor Nederland, via
 [energy-charts.info](https://api.energy-charts.info) (Fraunhofer ISE). Beide
 bronnen zijn openbaar. De app haalt de data één keer op en bewaart ze; daarna
 werkt dat jaar ook zonder internet.
+
+**Onbalansprijzen.** Alleen voor de strategie *handel op de onbalansmarkt*
+zijn de onbalansprijzen (verrekenprijzen) van TenneT nodig, per kwartier. Die
+kan de app niet zelf ophalen: TenneT geeft ze alleen via een download met de
+hand of via een API met een persoonlijke sleutel. Ze worden daarom
+meegeleverd, voor 2021 tot en met 2025: de map `onbalans/` bevat per jaar het
+bestand zoals het van de
+[downloadpagina van TenneT](https://www.tennet.eu/nl/de-elektriciteitsmarkt/transparantie/downloadpagina-transparantie)
+komt (*Settlement prices*, per jaar, CSV). Een nieuw jaar toevoegen is: het
+bestand van dat jaar in die map zetten. Voor een jaar dat er niet bij zit,
+kun je het bestand ook zelf inlezen bij **Instellingen → Batterij en
+omvormers**; de knop verschijnt daar alleen als het jaar ontbreekt.
+
+De afrekening volgt wat aanbieders als Frank Energie en Zonneplan openbaar
+beschrijven: alles wat over de meter loopt, ook de stroom van de batterij,
+staat op de gewone rekening tegen de uurprijs van een dynamisch contract;
+daarnaast krijg je het handelsresultaat uitgekeerd (de stroom van de batterij
+maal het verschil tussen onbalansprijs en uurprijs), min het deel dat de
+aanbieder houdt (standaard 15%, instelbaar). De aanbieders geven geen
+rekenformule; dit is de eenvoudigste lezing. Het plan kent bovendien alle
+prijzen vooraf, dus de uitkomst is een ruime bovengrens.
 
 **Wat er gemodelleerd is:**
 
@@ -50,8 +71,8 @@ werkt dat jaar ook zonder internet.
 | Aansluiting | Drie fasen met een hoofdzekering. Load balancing houdt de stroom per fase onder de zekering door laadpaal, batterij, warmtepomp of panelen terug te regelen. |
 | Huis en warmtepomp | De warmtevraag volgt uit de isolatie van het huis en de buitentemperatuur; de warmtepomp maakt daar stroomverbruik van, inclusief tapwater. |
 | Zonnepanelen | Opbrengst per veld (richting, helling, vermogen) uit de gemeten straling. |
-| Batterij en omvormers | Eén batterij met drie omvormers of drie losse batterijen; AC-gekoppeld of hybride. Met rendement, laadsnelheid, stand-byverbruik en laadgrenzen. |
-| Regelstrategie | Eigen verbruik van zonnestroom, piek shaving, of handel op uurprijzen. |
+| Batterij en omvormers | Eén batterij met drie omvormers of drie losse batterijen; AC-gekoppeld of hybride. Met rendement, laad- en ontlaadsnelheid (elk apart, in C), stand-byverbruik en laadgrenzen. |
+| Regelstrategie | Eigen verbruik van zonnestroom, piek shaving, handel op uurprijzen, of handel op de onbalansmarkt (per kwartier, binnen de grenzen van de hoofdaansluiting en de batterij). |
 | Auto en laadpaal | Ritten en thuiskomst, met direct laden, laden in de goedkoopste uren of laden op zonne-overschot. |
 | Huishouden | Apparaten die op wisselende momenten aan- en afschakelen. |
 | Netcongestie | Panelen die uitvallen door overspanning in de straat op zonnige dagen. |
@@ -59,7 +80,10 @@ werkt dat jaar ook zonder internet.
 
 **Wat eruit komt:** stroomkosten, afname en teruglevering per jaar, de mate van
 zelfvoorziening, de besparing door de batterij, de terugverdientijd en het
-netto voordeel over de levensduur. Verder de stroom per fase tegenover de
+netto voordeel over de levensduur. Voor wie onafhankelijk van het net wil
+worden: het aantal dagen per jaar waarop het huis zonder net had gekund
+(off-grid), in het overzicht bij de strategie eigen verbruik en als kolom bij
+de scenario's. Verder de stroom per fase tegenover de
 hoofdzekering, het gedrag van de warmtepomp, en een vergelijking van meerdere
 batterijgroottes en opstellingen naast elkaar.
 
@@ -142,12 +166,16 @@ niet opgeslagen.
 
 ![Het tabblad Instellingen](docs/screenshots/instellingen.png)
 
-De instellingen staan in uitklapbare blokken:
+De instellingen staan in blokken. Klik op de titel van een blok om het te
+openen; er staat er steeds één open. Of een onderdeel aanwezig is
+(warmtepomp, zonnepanelen, batterij, auto) zet je met de schakelaar rechts in
+de kop van het blok, ook als het dicht is.
 
 - **Aansluiting en load balancing** – de hoofdzekering, en welke apparaten
   terugregelen als een fase te zwaar belast wordt.
-- **Huis en warmtepomp** – oppervlak, isolatie en gewenste temperatuur van het
-  huis, en het vermogen en rendement van de warmtepomp.
+- **Huis** – oppervlak, isolatie en gewenste temperatuur van het huis.
+- **Warmtepomp** – het vermogen en rendement van de warmtepomp, en het warme
+  tapwater.
 - **Zonnepanelen** – een of meer velden met vermogen, richting en helling.
 - **Batterij en omvormers** – capaciteit, opstelling, vermogen per fase,
   rendement, en de strategie waarmee de batterij wordt ingezet.
@@ -283,7 +311,7 @@ Opbouw van de code:
 | `uitleg.py` | De teksten achter de vraagtekens. |
 | `bestandskeuze.py` | De Windows-vensters "Openen" en "Opslaan als". |
 | `batsim/config.py` | Alle instellingen, met standaardwaarden. |
-| `batsim/data.py` | Weer en prijzen ophalen en lokaal bewaren. |
+| `batsim/data.py` | Weer en prijzen ophalen en lokaal bewaren; onbalansprijzen inlezen. |
 | `batsim/zon.py` | Zonopbrengst uit KNMI-straling. |
 | `batsim/huis.py` | Warmtevraag van het huis en de warmtepomp. |
 | `batsim/belasting.py` | Huishoudelijke apparaten. |
