@@ -17,7 +17,10 @@ Opbouw (elke module heeft één onderwerp):
     auto        elektrische auto en laadpaal (met load balancing)
     simulatie   batterij, omvormers, regelstrategie en de tijdlus
     resultaat   kentallen en kosten uit een simulatie
+    scenario    alternatieven doorrekenen en afzetten tegen de baseline
+    versie      nagaan of er een nieuwere versie is uitgebracht
 """
 
-# De codeversie staat alleen hier; de app toont haar in de zijbalk.
+# De codeversie staat alleen hier; de app toont haar in de zijbalk en
+# vergelijkt haar met de nieuwste release (zie ``versie``).
 VERSION = "0.3.1"

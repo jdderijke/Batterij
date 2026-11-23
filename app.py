@@ -74,6 +74,7 @@ from batsim.paden import gebruikersmap, programmamap
 from batsim.resultaat import in_bezit, investering, vergelijk
 from batsim.scenario import combinaties, vergelijk_scenarios
 from batsim.simulatie import Uitkomst, handelt_op_onbalans, netspanning_straat, voer_uit, zonder_batterij
+from batsim.versie import DOWNLOAD, PROJECTPAGINA, beschikbare_update
 from batsim.snelstart import (
     AFGIFTE,
     BOUWMATERIALEN,
@@ -1044,8 +1045,8 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
 # ---------------------------------------------------------------------------
 
 
-def toon_overzicht(uit: Uitkomst, ref: Uitkomst) -> None:
-    """Toont de kentallen van het jaar en het verloop per maand."""
+def _overzicht_cijfers(uit: Uitkomst, ref: Uitkomst) -> None:
+    """Toont de kentallen van het jaar: het sub-tabblad Cijfers van het Overzicht."""
     k, r = uit.kentallen, ref.kentallen
     v = vergelijk(uit, ref)
     jaren = cfg_jaren(uit)
@@ -1180,21 +1181,37 @@ def toon_overzicht(uit: Uitkomst, ref: Uitkomst) -> None:
         )
     st.caption("Kosten zijn zonder vaste kosten (vastrecht, netbeheer); die zijn in elk scenario gelijk.")
 
-    # Per maand; het ene uur van het volgende jaar (door de tijdzone) valt af.
+
+def _per_maand(uit: Uitkomst) -> pd.DataFrame:
+    """Telt verbruik, zon, afname, teruglevering en kosten van een simulatie op per maand.
+
+    Waarom dit bestaat:
+        De grafieken en de tabel van het Overzicht tonen dezelfde maandcijfers,
+        voor de simulatie en voor de referentie zonder batterij. Eén functie
+        voor alle vier houdt ze gelijk.
+
+    Returns:
+        Eén rij per maand ("01-2025"), energie in kWh en kosten in euro. Het
+        ene uur van het volgende jaar (door de tijdzone) valt af.
+    """
     dt_h = uit.profielen.basis.dt_h
+    deel = uit.reeksen[uit.reeksen.index.year == uit.cfg.algemeen.jaar]
+    energie = deel[["huishouden", "warmtepomp", "auto", "zon"]].mul(dt_h)
+    energie["afname"] = deel["net"].clip(lower=0) * dt_h
+    energie["teruglevering"] = (-deel["net"]).clip(lower=0) * dt_h
+    energie["kosten"] = deel["kosten"]
+    maand = energie.resample("MS").sum()
+    maand.index = maand.index.strftime("%m-%Y")
+    return maand
 
-    def per_maand(reeksen: pd.DataFrame) -> pd.DataFrame:
-        deel = reeksen[reeksen.index.year == jaar]
-        energie = deel[["huishouden", "warmtepomp", "auto", "zon"]].mul(dt_h)
-        energie["afname"] = deel["net"].clip(lower=0) * dt_h
-        energie["teruglevering"] = (-deel["net"]).clip(lower=0) * dt_h
-        energie["kosten"] = deel["kosten"]
-        maand = energie.resample("MS").sum()
-        maand.index = maand.index.strftime("%m-%Y")
-        return maand
 
-    maand, maand_ref = per_maand(uit.reeksen), per_maand(ref.reeksen)
+def _overzicht_grafieken(maand: pd.DataFrame, maand_ref: pd.DataFrame) -> None:
+    """Toont het verloop per maand in grafieken: het sub-tabblad Grafieken van het Overzicht.
 
+    Args:
+        maand, maand_ref: de maandcijfers van ``_per_maand``, van de simulatie
+            en van de referentie zonder batterij.
+    """
     links, rechts = st.columns(2)
     with links:
         st.markdown("**Verbruik per maand (kWh)**")
@@ -1219,20 +1236,55 @@ def toon_overzicht(uit: Uitkomst, ref: Uitkomst) -> None:
     fig.update_layout(barmode="group")
     st.plotly_chart(opmaak(fig, 320, []).update_yaxes(title_text="€ per maand"), width="stretch")
 
-    with st.expander("Cijfers per maand"):
-        tabel = maand.rename(
-            columns={
-                "huishouden": "Huishouden (kWh)",
-                "warmtepomp": "Warmtepomp (kWh)",
-                "auto": "Auto (kWh)",
-                "zon": "Zon (kWh)",
-                "afname": "Afname (kWh)",
-                "teruglevering": "Teruglevering (kWh)",
-                "kosten": "Kosten (€)",
-            }
-        )
-        tabel["Kosten zonder batterij (€)"] = maand_ref["kosten"]
-        st.dataframe(tabel.round(0), width="stretch")
+
+def _overzicht_tabel(maand: pd.DataFrame, maand_ref: pd.DataFrame) -> None:
+    """Toont de maandcijfers als tabel: het sub-tabblad Tabel van het Overzicht.
+
+    Dezelfde getallen als in de grafieken. De tabel stond eerst ingeklapt
+    onder de grafieken ("Cijfers per maand"); met een eigen sub-tabblad hoeft
+    dat niet meer.
+
+    Args:
+        maand, maand_ref: de maandcijfers van ``_per_maand``, van de simulatie
+            en van de referentie zonder batterij.
+    """
+    st.markdown("**Cijfers per maand**")
+    tabel = maand.rename(
+        columns={
+            "huishouden": "Huishouden (kWh)",
+            "warmtepomp": "Warmtepomp (kWh)",
+            "auto": "Auto (kWh)",
+            "zon": "Zon (kWh)",
+            "afname": "Afname (kWh)",
+            "teruglevering": "Teruglevering (kWh)",
+            "kosten": "Kosten (€)",
+        }
+    )
+    tabel["Kosten zonder batterij (€)"] = maand_ref["kosten"]
+    st.dataframe(tabel.round(0), width="stretch")
+
+
+def toon_overzicht(uit: Uitkomst, ref: Uitkomst) -> None:
+    """Toont het Overzicht, verdeeld over drie sub-tabbladen: Cijfers, Grafieken en Tabel.
+
+    Waarom sub-tabbladen:
+        Het Overzicht was één lange pagina: eerst alle kentallen, daaronder
+        de grafieken per maand en helemaal onderaan een ingeklapte tabel. Wie
+        de grafieken wilde zien, moest elke keer langs alle kentallen
+        schuiven. Nu staat elk van de drie op een eigen sub-tabblad.
+
+    Args:
+        uit: de uitkomst van de simulatie.
+        ref: de uitkomst van dezelfde installatie zonder batterij.
+    """
+    cijfers, grafieken, tabel = st.tabs(["Cijfers", "Grafieken", "Tabel"])
+    maand, maand_ref = _per_maand(uit), _per_maand(ref)
+    with cijfers:
+        _overzicht_cijfers(uit, ref)
+    with grafieken:
+        _overzicht_grafieken(maand, maand_ref)
+    with tabel:
+        _overzicht_tabel(maand, maand_ref)
 
 
 def cfg_jaren(uit: Uitkomst) -> float:
@@ -1848,6 +1900,12 @@ div[data-testid="stLayoutWrapper"]:has(> .st-key-kopbalk) {
     z-index: 100;
     background: {achtergrond};
 }
+/* Sub-tabbladen (binnen het Overzicht) plakken niet: ze zouden op dezelfde
+   hoogte komen als de hoofdtabbladen en die bedekken. */
+.stTabs .stTabs [role="tablist"] {
+    position: static;
+    background: transparent;
+}
 </style>
 """
 
@@ -1926,6 +1984,113 @@ def _toon_herbereken(plek, te_herberekenen: bool) -> None:
         tekst.caption("De uitkomsten horen bij de huidige instellingen.")
 
 
+@st.cache_data(show_spinner=False, ttl=6 * 3600)
+def _update(huidig: str) -> str | None:
+    """Geeft het nummer van een nieuwere versie, of ``None``; onthouden voor zes uur.
+
+    Waarom onthouden:
+        Streamlit voert het script bij elke klik opnieuw uit. Zonder voorraad
+        zou de app bij elke klik GitHub iets vragen en daar tot drie seconden
+        op wachten. Zes uur is kort genoeg om een nieuwe versie dezelfde dag
+        nog te melden aan wie de app laat openstaan.
+    """
+    return beschikbare_update(huidig)
+
+
+def _toon_update() -> None:
+    """Meldt in de zijbalk dat er een nieuwe versie is, met de downloadknop en wat daarna te doen.
+
+    Waarom de stappen erbij staan:
+        De app werkt zichzelf niet bij (zie ``batsim/versie.py``). De knop
+        haalt alleen ``Batterij.zip`` op; wie daarna niets doet, draait nog
+        steeds de oude versie. Daarom staat er onder de knop wat er nog moet
+        gebeuren: uitpakken, deze app stoppen en de nieuwe starten.
+
+    Zonder nieuwe versie, of als GitHub niet bereikbaar is, toont dit niets.
+    """
+    nieuw = _update(VERSION)
+    if nieuw is None:
+        return
+    st.info(f"**Versie {nieuw} is beschikbaar.**")
+    st.link_button(f"Versie {nieuw} downloaden", DOWNLOAD, width="stretch")
+    st.caption(
+        "Na het downloaden:\n"
+        "1. Pak `Batterij.zip` uit (rechtermuisknop, **Alles uitpakken**).\n"
+        "2. Sluit deze app: sluit het zwarte venster.\n"
+        "3. Start `Batterij.exe` uit de **uitgepakte map**. De oude map kun je daarna weggooien.\n\n"
+        "Je instellingen en opgehaalde data blijven bewaard."
+    )
+
+
+# In README.md staat tussen deze twee regels wat alleen op GitHub zin heeft: de
+# downloadknop en de schildjes met versie en licentie. In het venster
+# Handleiding blijft dat weg. Wie de handleiding in de app leest, heeft het
+# programma al, en de knop zou de zip opnieuw downloaden, ook als er geen
+# nieuwe versie is. Een nieuwe versie meldt de zijbalk (zie ``_toon_update``).
+ALLEEN_OP_GITHUB = re.compile(r"<!-- alleen-op-github -->.*?<!-- /alleen-op-github -->", re.DOTALL)
+
+
+def _anker(kop: str) -> str:
+    """Maakt van een koptekst het anker dat GitHub eraan geeft ("Scenario's" wordt "scenarios").
+
+    De regel van GitHub: kleine letters, alles weg behalve letters, cijfers,
+    spaties en streepjes, en spaties worden streepjes. De inhoudsopgave van
+    README.md verwijst met precies deze ankers naar de koppen.
+    """
+    return re.sub(r"[^\w\- ]", "", kop.strip().lower()).replace(" ", "-")
+
+
+def _handleiding_links(tekst: str) -> str:
+    """Laat de links van README.md ook in het venster Handleiding werken.
+
+    Waarom dit bestaat:
+        README.md is geschreven voor GitHub. Twee soorten links werken daar
+        vanzelf en in de app niet:
+
+        - Links naar een kop (``[Handleiding](#handleiding)``, de hele
+          inhoudsopgave). GitHub geeft elke kop een anker; Streamlit doet dat
+          in een venster niet, dus de link wees nergens heen. Elke kop krijgt
+          hier daarom zelf een anker, met dezelfde naam als op GitHub.
+        - Links naar een bestand van het project (``[MIT](LICENSE)``). Die
+          bestanden staan niet op de webserver van de app; de link gaat nu
+          naar hetzelfde bestand op GitHub.
+
+        Links naar een website werkten al en blijven zoals ze zijn.
+
+        Afgewezen: de inhoudsopgave weglaten in de app. De handleiding is
+        lang, en juist in een venster is springen naar een hoofdstuk handig.
+
+    Args:
+        tekst: de Markdown van README.md.
+
+    Returns:
+        Dezelfde tekst met ankers bij de koppen en volledige adressen bij
+        links naar projectbestanden. De ankers zijn stukjes HTML; het venster
+        moet de tekst dus tonen met ``unsafe_allow_html=True``.
+    """
+    regels = []
+    in_code = False
+    for regel in tekst.splitlines():
+        # In een codeblok is een regel met een hekje commentaar, geen kop.
+        if regel.lstrip().startswith("```"):
+            in_code = not in_code
+        kop = None if in_code else re.match(r"#{1,6} +(.+)", regel)
+        if kop:
+            # Een lege regel na het anker, anders ziet Markdown de kop niet
+            # meer als kop.
+            regels += [f'<a id="{_anker(kop.group(1))}"></a>', ""]
+        regels.append(regel)
+    tekst = "\n".join(regels)
+    # Links die niet naar een website, een kop of een mailadres gaan, zijn
+    # paden binnen het project. Het uitroepteken ervoor sluit plaatjes uit;
+    # die handelt ``_handleiding_delen`` af.
+    return re.sub(
+        r"(?<!!)\[([^\]]+)\]\((?!https?://|#|mailto:)([^)\s]+)\)",
+        lambda m: f"[{m.group(1)}]({PROJECTPAGINA}/blob/main/{m.group(2)})",
+        tekst,
+    )
+
+
 @st.cache_data(show_spinner=False)
 def _handleiding_delen(gewijzigd: float) -> list[tuple[str, str]]:
     """Leest README.md en knipt de tekst op bij elke schermafbeelding.
@@ -1950,7 +2115,11 @@ def _handleiding_delen(gewijzigd: float) -> list[tuple[str, str]]:
         De handleiding als rij van ``("tekst", markdown)`` en
         ``("plaatje", pad)``, in de volgorde van het bestand.
     """
-    tekst = HANDLEIDING_PAD.read_text(encoding="utf-8")
+    tekst = ALLEEN_OP_GITHUB.sub("", HANDLEIDING_PAD.read_text(encoding="utf-8"))
+    # Eerst de links, dan knippen. De verwijzingen naar plaatjes laat
+    # ``_handleiding_links`` ongemoeid, zodat het patroon hieronder ze nog
+    # met hun oorspronkelijke pad vindt.
+    tekst = _handleiding_links(tekst)
     # Met een groep in het patroon geeft ``re.split`` om en om een stuk tekst
     # en het pad van het plaatje dat erop volgt.
     stukken = re.split(r"!\[[^\]]*\]\((docs/screenshots/[\w.-]+\.png)\)", tekst)
@@ -1985,7 +2154,10 @@ def handleiding_venster() -> None:
         return
     for soort, inhoud in delen:
         if soort == "tekst":
-            st.markdown(inhoud)
+            # Met HTML toegestaan: de ankers bij de koppen zijn HTML (zie
+            # ``_handleiding_links``). De tekst is onze eigen README.md, geen
+            # invoer van buiten.
+            st.markdown(inhoud, unsafe_allow_html=True)
         else:
             st.image(inhoud)
 
@@ -2248,6 +2420,7 @@ def main() -> None:
     with st.sidebar:
         st.title("Batterijsimulatie")
         st.caption(f"Versie {VERSION}")
+        _toon_update()
         # De knoppen in de zijbalk hebben bewust GEEN uitleg achter de muis
         # (``help``): de ballon kwam bij elke beweging naar een knop op en zat
         # het klikken in de weg. De namen zeggen wat de knoppen doen; wat er

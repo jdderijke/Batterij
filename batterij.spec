@@ -85,6 +85,7 @@ a = Analysis(
         "batsim.scenario",
         "batsim.simulatie",
         "batsim.snelstart",
+        "batsim.versie",
         "plotly.graph_objects",
         "plotly.subplots",
     ],

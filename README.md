@@ -5,6 +5,7 @@ elektrische auto samen doen op een driefasige huisaansluiting, met het echte
 weer en de echte stroomprijzen van een jaar uit het verleden. Het antwoord op
 de vraag: **loont een batterij bij mij, en welke dan?**
 
+<!-- alleen-op-github -->
 [![Download voor Windows 10 en 11](https://img.shields.io/badge/Download-Windows%2010%20en%2011-0078D4?style=for-the-badge)](https://github.com/jdderijke/Batterij/releases/latest/download/Batterij.zip)
 [![Nieuwste versie](https://img.shields.io/github/v/release/jdderijke/Batterij?label=versie&style=for-the-badge)](https://github.com/jdderijke/Batterij/releases/latest)
 [![Licentie: MIT](https://img.shields.io/badge/licentie-MIT-green?style=for-the-badge)](LICENSE)
@@ -16,6 +17,7 @@ versienummer linksboven in de zijbalk.
 
 *Batterij.zip, ongeveer 90 MB. Python installeren is niet nodig. Zie
 [Installeren op Windows](#installeren-op-windows).*
+<!-- /alleen-op-github -->
 
 ![Het tabblad Overzicht met de kentallen van een jaar](docs/screenshots/overzicht.png)
 
@@ -95,7 +97,9 @@ batterij gelijk.
 
 Werkt op Windows 10 en Windows 11 (64-bit).
 
-1. Klik op de knop **Download** bovenaan deze pagina. Je krijgt `Batterij.zip`.
+1. Klik op de knop **Download** bovenaan de
+   [pagina op GitHub](https://github.com/jdderijke/Batterij). Je krijgt
+   `Batterij.zip`.
 2. Klik met de rechtermuisknop op het zipbestand en kies **Alles uitpakken**.
 3. Open de uitgepakte map `Batterij` en dubbelklik op **`Batterij.exe`**.
 
@@ -119,8 +123,15 @@ Goed om te weten:
   `%LOCALAPPDATA%\Batterij` (meestal
   `C:\Users\<naam>\AppData\Local\Batterij`). Ze blijven staan als je een
   nieuwe versie van het programma neerzet.
+- **Een nieuwe versie.** De app kijkt bij het starten of er een nieuwere
+  versie is uitgebracht. Zo ja, dan staat er linksboven in de zijbalk een
+  melding met een knop om `Batterij.zip` te downloaden. De app werkt zichzelf
+  niet bij: pak de zip uit, sluit de app (het zwarte venster) en start
+  `Batterij.exe` uit de uitgepakte map. De oude map kun je daarna weggooien.
 - **Alleen op je eigen computer.** De app is niet bereikbaar voor andere
-  apparaten op het netwerk en stuurt geen gebruiksgegevens weg.
+  apparaten op het netwerk en stuurt geen gebruiksgegevens weg. Naast het
+  ophalen van weer en prijzen vraagt ze alleen bij GitHub na wat de nieuwste
+  versie is; daarbij gaat niets over jou of je instellingen mee.
 - **Verwijderen:** gooi de map `Batterij` weg, en desgewenst de map met je
   gegevens hierboven.
 
@@ -246,9 +257,11 @@ tabbladen op **Herbereken alles** hebt geklikt.
 
 ### Overzicht
 
-Het tabblad op de afbeelding bovenaan deze pagina. Alle getallen gaan over
-het hele jaar. Het kleine getal onder een waarde is het verschil met dezelfde
-installatie zonder batterij.
+Het tabblad op de afbeelding bovenaan deze pagina. Het heeft drie
+sub-tabbladen: **Cijfers**, **Grafieken** en **Tabel**.
+
+Op **Cijfers** gaan alle getallen over het hele jaar. Het kleine getal onder
+een waarde is het verschil met dezelfde installatie zonder batterij.
 
 - **Stroom en kosten** – stroomkosten, afname, teruglevering, zelfvoorziening
   en eigen verbruik van zonnestroom.
@@ -259,8 +272,9 @@ installatie zonder batterij.
   hoogste kwartierpiek en hoeveel zonnestroom verloren ging.
 - **Investering** – de eenmalige kosten per onderdeel.
 
-Daaronder staan grafieken per maand en, uitklapbaar, dezelfde cijfers als
-tabel.
+Op **Grafieken** staat het verloop per maand: het verbruik, de zon met afname
+en teruglevering, en de stroomkosten met en zonder batterij. Op **Tabel**
+staan dezelfde maandcijfers als getallen.
 
 ### Tijdverloop
 
