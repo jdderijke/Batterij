@@ -6,15 +6,30 @@ Waarom dit bestaat:
     De gebruiker geeft per onderdeel (aantal panelen, batterijgrootte,
     topologie, koppeling, strategie) de alternatieven op die hij wil zien. Elk
     scenario is de baseline met een of meer onderdelen vervangen door een
-    alternatief, en wordt afgezet tegen diezelfde baseline. Wie alleen een
-    andere strategie kiest, krijgt dus precies één scenario: de baseline met
-    die strategie.
+    alternatief. Wie alleen een andere strategie kiest, krijgt dus precies één
+    scenario: de baseline met die strategie.
 
-    Afgewezen: vergelijken met "de huidige panelen zonder batterij", zoals
-    eerder. Dat beantwoordt de vraag "loont een batterij?", en die staat al op
-    het Overzicht. Hier is de vraag "wat levert een verandering op ten
-    opzichte van wat ik nu heb ingesteld?", en daar hoort de baseline als
-    nulpunt bij. Het werkt bovendien ook zonder batterij of zonder panelen.
+    Het vaste punt van de vergelijking is de baseline, wat daar ook in zit
+    (met of zonder batterij, met of zonder panelen). De baseline heeft de
+    besparing, de investering, de terugverdientijd en het netto voordeel die
+    ook op het Overzicht staan: haar hele investering (alles wat nog moet
+    worden aangeschaft) tegenover de installatie zonder investering (zie
+    ``simulatie.zonder_investering``). Een scenario begint bij die getallen: zijn
+    investering is die van de baseline plus of min wat het scenario meer of
+    minder kost, en zijn besparing is die van de baseline plus of min wat het
+    scenario per jaar meer of minder bespaart. Uit die twee volgen de nieuwe
+    terugverdientijd en het nieuwe netto voordeel. De baseline staat zelf ook
+    als rij in de tabel, zodat beide naast elkaar te lezen zijn.
+
+    Afgewezen: de baseline als nulpunt met investering nul, zoals even het
+    geval was. Een baseline met een batterij die nog gekocht moet worden,
+    stond er dan als "kost niets", en een scenario met een kleinere batterij
+    kreeg een negatieve investering. Dat klopt niet met het Overzicht, waar
+    dezelfde baseline wel een investering en een terugverdientijd heeft.
+
+    Afgewezen: een aparte kolom "verschil met de baseline". De baseline staat
+    in dezelfde tabel en dezelfde grafiek; het verschil is daar af te lezen,
+    en de kleur van de balk zegt of een scenario beter of slechter is.
 
     Afgewezen: de gebruiker de volledige lijsten laten opgeven, met de waarde
     van de baseline erbij. Dan moet hij bij elk onderdeel dat hij níet wil
@@ -30,11 +45,17 @@ from typing import Callable, Iterable
 import pandas as pd
 
 from .config import KOPPELINGEN, STRATEGIEEN, TOPOLOGIEEN, Config
-from .resultaat import vergelijk
-from .simulatie import Uitkomst, voer_uit
+from .resultaat import terugverdientijd, vergelijk
+from .simulatie import Uitkomst, voer_uit, zonder_investering
 
 # Eén scenario: (batterij in kWh, paneelfactor, topologie, koppeling, strategie).
 Keuze = tuple[float, float, str, str, str]
+
+# De twee waarden van de kolom "Scenario" in de tabel. De kolom is er om de rij
+# van de baseline te kunnen aanwijzen (voor de grijze balk en de opmaak van de
+# rij); de app toont haar niet als kolom.
+BASELINE = "Baseline"
+ALTERNATIEF = "Alternatief"
 
 
 def basiskeuze(basis: Config) -> Keuze:
@@ -136,13 +157,23 @@ def vergelijk_scenarios(
     strategieen: Iterable[str] = (),
     voortgang: Callable[[int, int], None] | None = None,
     onbalans: pd.DataFrame | None = None,
+    baseline: Uitkomst | None = None,
     referentie: Uitkomst | None = None,
 ) -> pd.DataFrame:
-    """Rekent alle scenario's door en geeft één rij per scenario.
+    """Rekent alle scenario's door en geeft één rij per scenario, plus een rij voor de baseline.
 
-    Welke scenario's dat zijn, staat bij ``combinaties``. Besparing,
-    meerinvestering, terugverdientijd en netto voordeel zijn steeds het
-    verschil met de baseline.
+    Welke scenario's dat zijn, staat bij ``combinaties``. De rij van de
+    baseline heeft de besparing, investering, terugverdientijd en het
+    netto voordeel van het Overzicht. Een scenario krijgt de getallen van de
+    baseline plus of min zijn verschil met de baseline:
+
+    - investering = die van de baseline + (aanschaf scenario − aanschaf
+      baseline). Extra panelen of een grotere batterij komen er dus bij, een
+      kleinere batterij gaat eraf;
+    - besparing = die van de baseline + (stroomkosten baseline − stroomkosten
+      scenario), per jaar;
+    - terugverdientijd en netto voordeel volgen uit die twee, met dezelfde
+      regels als op het Overzicht.
 
     Args:
         basis: de baseline.
@@ -151,25 +182,45 @@ def vergelijk_scenarios(
         voortgang: wordt na elk scenario aangeroepen met (klaar, totaal).
         onbalans: kwartiertabel van ``data.laad_onbalans``; alleen nodig als
             "onbalans" de strategie is van de baseline of van een alternatief.
-        referentie: de uitkomst van de baseline, als de aanroeper die al
-            heeft (de app heeft haar altijd). Zonder wordt ze hier berekend.
+        baseline: de uitkomst van de baseline, als de aanroeper die al heeft
+            (de app heeft haar altijd). Zonder wordt ze hier berekend.
+        referentie: de uitkomst van de baseline zonder investering; idem. Ze is
+            alleen nodig voor de eigen getallen van de baseline (dezelfde
+            als op het Overzicht); de scenario's worden met de baseline
+            vergeleken.
 
     Returns:
-        Tabel, gesorteerd op netto voordeel (beste bovenaan). Leeg als er
-        geen alternatieven zijn opgegeven.
+        Tabel, gesorteerd op netto voordeel (beste bovenaan). De kolom
+        "Scenario" zegt welke rij de baseline is.
     """
+    if baseline is None:
+        baseline = voer_uit(basis.kopie(), weer, prijzen, onbalans)
     if referentie is None:
-        referentie = voer_uit(basis.kopie(), weer, prijzen, onbalans)
+        referentie = voer_uit(zonder_investering(basis), weer, prijzen, onbalans)
     lijst = combinaties(basis, capaciteiten, paneelfactoren, topologieen, koppelingen, strategieen)
+    # De getallen van de baseline zelf: het beginpunt van elk scenario.
+    van_baseline = vergelijk(baseline, referentie)
+    jaren = basis.investering.levensduur_jaren
 
-    rijen = []
-    for nummer, (cap, factor, topo, kop, strat) in enumerate(lijst, start=1):
-        uitkomst = voer_uit(maak_variant(basis, cap, factor, topo, kop, strat), weer, prijzen, onbalans)
+    def rij(naam: str, keuze: Keuze, uitkomst: Uitkomst) -> dict:
+        """Maakt de tabelrij van één doorgerekende instelling (baseline of scenario)."""
+        cap, _, topo, kop, strat = keuze
         k = uitkomst.kentallen
-        v = vergelijk(uitkomst, referentie)
+        # Het verschil met de baseline; voor de baseline zelf is dat nul en
+        # blijven haar eigen getallen staan.
+        verschil = vergelijk(uitkomst, baseline)
+        besparing = van_baseline["besparing_eur_per_jaar"] + verschil["besparing_eur_per_jaar"]
+        meer = van_baseline["meerinvestering_eur"] + verschil["meerinvestering_eur"]
+        v = {
+            "besparing_eur_per_jaar": besparing,
+            "meerinvestering_eur": meer,
+            "terugverdientijd_jaar": terugverdientijd(meer, besparing),
+            "netto_voordeel_eur": besparing * jaren - meer,
+        }
         met_batterij = cap > 0
-        rijen.append(
+        return (
             {
+                "Scenario": naam,
                 # Eerst de panelen, dan de batterij: dezelfde volgorde als de
                 # invoervelden en de samenvatting van de baseline in de app.
                 "Panelen (kWp)": round(k["kwp"], 2),
@@ -179,7 +230,7 @@ def vergelijk_scenarios(
                 "Strategie": STRATEGIEEN[strat] if met_batterij else "-",
                 "Kosten (€/jaar)": k["kosten_eur"] / k["jaren"],
                 "Besparing (€/jaar)": v["besparing_eur_per_jaar"],
-                "Meerinvestering (€)": v["meerinvestering_eur"],
+                "Investering (€)": v["meerinvestering_eur"],
                 "Terugverdientijd (jaar)": v["terugverdientijd_jaar"],
                 "Netto voordeel (€)": v["netto_voordeel_eur"],
                 # Voor wie onafhankelijk van het net wil zijn, telt dit getal
@@ -195,10 +246,13 @@ def vergelijk_scenarios(
                 "Zon uit door overspanning (kWh)": k["uitgeschakeld_kwh"],
             }
         )
+
+    # De baseline is al doorgerekend en staat als eerste in de lijst; na het
+    # sorteren staat ze tussen de scenario's op haar eigen plek.
+    rijen = [rij(BASELINE, basiskeuze(basis), baseline)]
+    for nummer, keuze in enumerate(lijst, start=1):
+        rijen.append(rij(ALTERNATIEF, keuze, voer_uit(maak_variant(basis, *keuze), weer, prijzen, onbalans)))
         if voortgang is not None:
             voortgang(nummer, len(lijst))
 
-    tabel = pd.DataFrame(rijen)
-    if tabel.empty:
-        return tabel
-    return tabel.sort_values("Netto voordeel (€)", ascending=False, ignore_index=True)
+    return pd.DataFrame(rijen).sort_values("Netto voordeel (€)", ascending=False, ignore_index=True)

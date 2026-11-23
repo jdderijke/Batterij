@@ -248,8 +248,36 @@ def bereken_kentallen(uitkomst: Uitkomst) -> dict:
     return k
 
 
+def terugverdientijd(meerinvestering_eur: float, besparing_eur_per_jaar: float) -> float:
+    """Geeft na hoeveel jaar de besparing de meerinvestering heeft terugbetaald.
+
+    Waarom dit bestaat:
+        Het Overzicht en de scenario's rekenen de terugverdientijd uit
+        dezelfde twee getallen, maar komen er langs een andere weg aan (zie
+        ``vergelijk`` en ``scenario.vergelijk_scenarios``). De regel voor de
+        randgevallen staat daarom op één plek.
+
+    Returns:
+        Nul als er niets extra geïnvesteerd wordt, oneindig als er wel
+        geïnvesteerd wordt maar niets bespaard, en anders de investering
+        gedeeld door de besparing per jaar.
+    """
+    if meerinvestering_eur <= 0:
+        return 0.0
+    if besparing_eur_per_jaar > 0:
+        return meerinvestering_eur / besparing_eur_per_jaar
+    return math.inf
+
+
 def vergelijk(uitkomst: Uitkomst, referentie: Uitkomst) -> dict[str, float]:
-    """Zet een scenario af tegen een referentie (meestal: zonder batterij).
+    """Zet een uitkomst af tegen een referentie.
+
+    De app gebruikt als referentie de installatie zonder investering
+    (``simulatie.zonder_investering``). Die kost niets, dus de
+    "meerinvestering" is dan de hele investering van de uitkomst: alles wat
+    nog moet worden aangeschaft. De naam van de sleutel is gebleven omdat de
+    functie zelf elk tweetal vergelijkt, ook twee installaties die allebei
+    iets kosten (zie ``scenario.vergelijk_scenarios``).
 
     Returns:
         ``besparing_eur_per_jaar``, ``meerinvestering_eur``,
@@ -261,15 +289,9 @@ def vergelijk(uitkomst: Uitkomst, referentie: Uitkomst) -> dict[str, float]:
     jaren = k["jaren"] if k["jaren"] > 0 else 1.0
     besparing = (ref["kosten_eur"] - k["kosten_eur"]) / jaren
     meer = k["investering"]["totaal"] - ref["investering"]["totaal"]
-    if meer <= 0:
-        terugverdientijd = 0.0
-    elif besparing > 0:
-        terugverdientijd = meer / besparing
-    else:
-        terugverdientijd = math.inf
     return {
         "besparing_eur_per_jaar": besparing,
         "meerinvestering_eur": meer,
-        "terugverdientijd_jaar": terugverdientijd,
+        "terugverdientijd_jaar": terugverdientijd(meer, besparing),
         "netto_voordeel_eur": besparing * uitkomst.cfg.investering.levensduur_jaren - meer,
     }

@@ -72,8 +72,8 @@ from batsim.data import (
 from batsim.huis import warmteverlies_w_per_k
 from batsim.paden import gebruikersmap, programmamap
 from batsim.resultaat import in_bezit, investering, vergelijk
-from batsim.scenario import combinaties, vergelijk_scenarios
-from batsim.simulatie import Uitkomst, handelt_op_onbalans, netspanning_straat, voer_uit, zonder_batterij
+from batsim.scenario import BASELINE, combinaties, vergelijk_scenarios
+from batsim.simulatie import Uitkomst, handelt_op_onbalans, netspanning_straat, voer_uit, zonder_investering
 from batsim.versie import DOWNLOAD, PROJECTPAGINA, beschikbare_update
 from batsim.snelstart import (
     AFGIFTE,
@@ -1056,16 +1056,26 @@ def _overzicht_cijfers(uit: Uitkomst, ref: Uitkomst) -> None:
     # blijven; de volledige uitleg per getal staat achter het vraagteken.
     st.info(
         f"Alle getallen gaan over **het hele jaar {jaar}** (1 januari tot en met 31 december), tenzij er iets anders bij staat. "
-        "Het kleine getal onder een waarde is het **verschil met dezelfde installatie zonder batterij**. "
+        "Het kleine getal onder een waarde is het **verschil met de installatie zonder investering**: wat je nu al hebt, "
+        "zonder wat je nog moet aanschaffen. "
         "Achter elk **vraagteken (?)** staat wat het getal betekent en hoe je het leest."
     )
+    if k["investering"]["totaal"] <= 0:
+        # Zonder aanschaf is de installatie gelijk aan de referentie; alle
+        # verschillen en de besparing zijn dan nul. Dat is geen fout, maar
+        # zonder deze regel ziet het er wel zo uit.
+        st.caption(
+            "Er valt bij deze instellingen niets aan te schaffen (alles is al in bezit, of er is geen batterij en er zijn geen nieuwe panelen). "
+            "De verschillen, de besparing en de terugverdientijd zijn daarom nul."
+        )
 
     st.markdown(f"**Stroom en kosten in {jaar}**")
     k1, k2, k3, k4, k5 = st.columns(5)
     k1.metric(
         "Stroomkosten per jaar",
         f"€ {nl(k['kosten_eur'])}",
-        f"{nl(k['kosten_eur'] - r['kosten_eur'])} t.o.v. zonder batterij",
+        # Kort gehouden: met "t.o.v." erbij werd de tekst in de tegel afgekapt.
+        f"{nl(k['kosten_eur'] - r['kosten_eur'])} zonder investering",
         delta_color="inverse",
         help=bij_uitkomst("kosten"),
     )
@@ -1116,10 +1126,15 @@ def _overzicht_cijfers(uit: Uitkomst, ref: Uitkomst) -> None:
             help=bij_uitkomst("offgrid_reeks"),
         )
 
-    st.markdown("**Loont de batterij?**")
+    # De investering hier is de hele investering: alles wat nog moet worden
+    # aangeschaft, hetzelfde bedrag als "Totaal" verderop. Was eerst alleen
+    # het deel van de batterij ("Meerinvestering", tegenover dezelfde
+    # installatie zonder batterij); nieuwe panelen deden dan niet mee in de
+    # terugverdientijd.
+    st.markdown("**Loont de investering?**")
     k1, k2, k3, k4, k5 = st.columns(5)
     k1.metric("Besparing per jaar", f"€ {nl(v['besparing_eur_per_jaar'])}", help=bij_uitkomst("besparing"))
-    k2.metric("Meerinvestering (eenmalig)", f"€ {nl(v['meerinvestering_eur'])}", help=bij_uitkomst("meerinvestering"))
+    k2.metric("Investering (eenmalig)", f"€ {nl(v['meerinvestering_eur'])}", help=bij_uitkomst("meerinvestering"))
     k3.metric("Terugverdientijd", f"{nl(v['terugverdientijd_jaar'], 1)} jaar", help=bij_uitkomst("terugverdientijd"))
     k4.metric(
         f"Netto voordeel over {nl(uit.cfg.investering.levensduur_jaren)} jaar",
@@ -1187,7 +1202,7 @@ def _per_maand(uit: Uitkomst) -> pd.DataFrame:
 
     Waarom dit bestaat:
         De grafieken en de tabel van het Overzicht tonen dezelfde maandcijfers,
-        voor de simulatie en voor de referentie zonder batterij. Eén functie
+        voor de simulatie en voor de referentie zonder investering. Eén functie
         voor alle vier houdt ze gelijk.
 
     Returns:
@@ -1210,7 +1225,7 @@ def _overzicht_grafieken(maand: pd.DataFrame, maand_ref: pd.DataFrame) -> None:
 
     Args:
         maand, maand_ref: de maandcijfers van ``_per_maand``, van de simulatie
-            en van de referentie zonder batterij.
+            en van de referentie zonder investering.
     """
     links, rechts = st.columns(2)
     with links:
@@ -1229,10 +1244,10 @@ def _overzicht_grafieken(maand: pd.DataFrame, maand_ref: pd.DataFrame) -> None:
         fig.update_layout(barmode="group")
         st.plotly_chart(opmaak(fig, 340, []).update_yaxes(title_text="kWh per maand"), width="stretch")
 
-    st.markdown("**Stroomkosten per maand (€), met en zonder batterij**")
+    st.markdown("**Stroomkosten per maand (€), met en zonder de investering**")
     fig = go.Figure()
-    fig.add_bar(x=maand_ref.index, y=maand_ref["kosten"], name="Zonder batterij", marker_color=KLEUR["referentie"])
-    fig.add_bar(x=maand.index, y=maand["kosten"], name="Met batterij", marker_color=KLEUR["batterij"])
+    fig.add_bar(x=maand_ref.index, y=maand_ref["kosten"], name="Zonder investering", marker_color=KLEUR["referentie"])
+    fig.add_bar(x=maand.index, y=maand["kosten"], name="Met investering", marker_color=KLEUR["batterij"])
     fig.update_layout(barmode="group")
     st.plotly_chart(opmaak(fig, 320, []).update_yaxes(title_text="€ per maand"), width="stretch")
 
@@ -1246,7 +1261,7 @@ def _overzicht_tabel(maand: pd.DataFrame, maand_ref: pd.DataFrame) -> None:
 
     Args:
         maand, maand_ref: de maandcijfers van ``_per_maand``, van de simulatie
-            en van de referentie zonder batterij.
+            en van de referentie zonder investering.
     """
     st.markdown("**Cijfers per maand**")
     tabel = maand.rename(
@@ -1260,7 +1275,7 @@ def _overzicht_tabel(maand: pd.DataFrame, maand_ref: pd.DataFrame) -> None:
             "kosten": "Kosten (€)",
         }
     )
-    tabel["Kosten zonder batterij (€)"] = maand_ref["kosten"]
+    tabel["Kosten zonder investering (€)"] = maand_ref["kosten"]
     st.dataframe(tabel.round(0), width="stretch")
 
 
@@ -1275,7 +1290,8 @@ def toon_overzicht(uit: Uitkomst, ref: Uitkomst) -> None:
 
     Args:
         uit: de uitkomst van de simulatie.
-        ref: de uitkomst van dezelfde installatie zonder batterij.
+        ref: de uitkomst van de installatie zonder investering (zie
+            ``simulatie.zonder_investering``).
     """
     cijfers, grafieken, tabel = st.tabs(["Cijfers", "Grafieken", "Tabel"])
     maand, maand_ref = _per_maand(uit), _per_maand(ref)
@@ -1534,17 +1550,6 @@ def _getallen(tekst: str) -> list[float]:
     return getallen
 
 
-# De uitleg bij besparing, meerinvestering, terugverdientijd en netto voordeel
-# is geschreven voor het Overzicht, waar met "zonder batterij" wordt
-# vergeleken. Bij de scenario's is de baseline het nulpunt; deze zin staat
-# daarom vóór dezelfde uitleg. Afgewezen: aparte teksten voor de scenario's;
-# dat zijn vier teksten die bij elke wijziging van de som mee moeten.
-_T_O_V_BASELINE = (
-    "**Op dit tabblad is dit het verschil met de baseline**, niet met 'zonder batterij' zoals in het Overzicht; "
-    "lees 'de batterij' hieronder als 'het scenario'.\n\n"
-)
-
-
 def _baseline_tekst(uit: Uitkomst) -> str:
     """Vat de baseline van de scenario's samen in één regel: panelen, batterij en architectuur.
 
@@ -1573,7 +1578,7 @@ def _baseline_tekst(uit: Uitkomst) -> str:
     return " · ".join(delen)
 
 
-def toon_scenarios(uit: Uitkomst, weer: pd.DataFrame, prijzen: pd.DataFrame, verouderd: bool) -> None:
+def toon_scenarios(uit: Uitkomst, ref: Uitkomst, weer: pd.DataFrame, prijzen: pd.DataFrame, verouderd: bool) -> None:
     """Laat alternatieven voor panelen, batterij en architectuur doorrekenen tegen de baseline.
 
     Waarom dit bestaat:
@@ -1585,7 +1590,10 @@ def toon_scenarios(uit: Uitkomst, weer: pd.DataFrame, prijzen: pd.DataFrame, ver
 
     Args:
         uit: de uitkomst van de laatste berekening; haar instelling is de
-            baseline en zijzelf de referentie.
+            baseline.
+        ref: de uitkomst van de installatie zonder investering. Daaruit
+            komen de eigen getallen van de baseline (dezelfde als op het
+            Overzicht); de scenario's worden met de baseline vergeleken.
         weer, prijzen: de data van het jaar van die berekening.
         verouderd: of de instellingen sinds die berekening gewijzigd zijn.
     """
@@ -1596,7 +1604,8 @@ def toon_scenarios(uit: Uitkomst, weer: pd.DataFrame, prijzen: pd.DataFrame, ver
 
     st.markdown(
         "Elk scenario is de **baseline** met een of meer onderdelen vervangen door een alternatief dat je hieronder kiest; "
-        "al het andere blijft gelijk. Elk scenario wordt vergeleken met de baseline."
+        "al het andere blijft gelijk. De baseline staat zelf ook in de uitkomst, met haar eigen investering en terugverdientijd, "
+        "zodat je ziet of een scenario beter of slechter uitpakt."
     )
     st.info("Baseline (de instellingen van de laatste berekening): " + _baseline_tekst(uit))
     if verouderd:
@@ -1704,8 +1713,10 @@ def toon_scenarios(uit: Uitkomst, weer: pd.DataFrame, prijzen: pd.DataFrame, ver
             strategieen,
             voortgang=lambda klaar, totaal: balk.progress(klaar / totaal, text=f"Scenario {klaar} van {totaal}"),
             onbalans=onbalans,
-            # De baseline is al doorgerekend; opnieuw rekenen is niet nodig.
-            referentie=uit,
+            # De baseline en haar referentie zonder investering zijn al
+            # doorgerekend; opnieuw rekenen is niet nodig.
+            baseline=uit,
+            referentie=ref,
         )
         st.session_state["scenario_jaren"] = basis.investering.levensduur_jaren
         # Bij welke baseline deze tabel hoort. Na een nieuwe berekening met
@@ -1722,14 +1733,19 @@ def toon_scenarios(uit: Uitkomst, weer: pd.DataFrame, prijzen: pd.DataFrame, ver
     # het Overzicht en de kolom in de tabel hieronder: de som, en wat er niet
     # in zit (restwaarde, rente, veroudering).
     st.markdown(
-        f"**Netto voordeel over {nl(jaren)} jaar ten opzichte van de baseline** "
-        f"(besparing per jaar × {nl(jaren)} − meerinvestering; beste bovenaan)",
-        help=_T_O_V_BASELINE + bij_uitkomst("netto_voordeel"),
+        f"**Netto voordeel over {nl(jaren)} jaar** (besparing per jaar × {nl(jaren)} − investering; beste bovenaan)",
+        help=bij_uitkomst("netto_voordeel"),
+    )
+    st.caption(
+        "De grijze balk is de baseline, met het netto voordeel van het Overzicht. "
+        "**Groen** is een scenario met een hoger netto voordeel dan de baseline, **rood** een scenario met een lager."
     )
     top = tabel.head(20).iloc[::-1]
+    netto_baseline = tabel.loc[tabel["Scenario"] == BASELINE, "Netto voordeel (€)"].iloc[0]
     # Eerst de panelen, dan de batterij, net als de invoervelden.
     etiket = [
-        f"{nl(r['Panelen (kWp)'], 1)} kWp · "
+        ("BASELINE · " if r["Scenario"] == BASELINE else "")
+        + f"{nl(r['Panelen (kWp)'], 1)} kWp · "
         + (
             f"{nl(r['Batterij (kWh)'])} kWh · {r['Topologie'].split(',')[0].split(' met')[0]} · {r['Koppeling']} · {r['Strategie']}"
             if r["Batterij (kWh)"] > 0
@@ -1742,8 +1758,14 @@ def toon_scenarios(uit: Uitkomst, weer: pd.DataFrame, prijzen: pd.DataFrame, ver
             x=top["Netto voordeel (€)"],
             y=etiket,
             orientation="h",
-            # Groen is beter dan de baseline, rood is slechter.
-            marker_color=[KLEUR["beter"] if waarde >= 0 else KLEUR["slechter"] for waarde in top["Netto voordeel (€)"]],
+            # De baseline zelf is grijs; groen is beter dan de baseline, rood
+            # is slechter. De kleur volgt het verschil met de baseline, niet
+            # het teken van het netto voordeel: een scenario kan geld kosten
+            # en toch beter zijn dan de baseline, en omgekeerd.
+            marker_color=[
+                KLEUR["referentie"] if soort == BASELINE else KLEUR["beter"] if netto >= netto_baseline else KLEUR["slechter"]
+                for soort, netto in zip(top["Scenario"], top["Netto voordeel (€)"])
+            ],
             hovertemplate="%{y}<br>€ %{x:,.0f}<extra></extra>",
         )
     )
@@ -1755,20 +1777,31 @@ def toon_scenarios(uit: Uitkomst, weer: pd.DataFrame, prijzen: pd.DataFrame, ver
     # ze krijgen dus ook dezelfde uitleg, bij de kolomkop.
     st.caption(
         "Ga met de muis op een kolomkop staan voor uitleg. Alle bedragen en kWh's gelden per jaar, behalve waar 'eenmalig' of de rekenperiode bij staat. "
-        "Besparing, meerinvestering, terugverdientijd en netto voordeel zijn het verschil met de baseline; een negatieve meerinvestering "
-        "betekent dat het scenario goedkoper is in aanschaf dan de baseline."
+        "De **grijze rij is de baseline**, met de besparing, de investering en de terugverdientijd van het Overzicht. "
+        "Een scenario heeft de investering van de baseline plus of min wat het scenario meer of minder kost, en de besparing van de "
+        "baseline plus of min wat het per jaar meer of minder bespaart; daaruit volgen zijn terugverdientijd en netto voordeel."
     )
+    # De rij van de baseline is grijs en vet, zodat ze zonder extra kolom te
+    # vinden is. De kolom "Scenario", waaraan de rij herkend wordt, blijft
+    # zelf verborgen.
     st.dataframe(
-        tabel,
+        tabel.style.apply(
+            lambda rij: [("background-color: rgba(137, 135, 129, 0.25); font-weight: 600" if rij["Scenario"] == BASELINE else "")] * len(rij),
+            axis=1,
+        ),
         width="stretch",
         hide_index=True,
         column_config={
+            "Scenario": None,
+            # Met opmaak per rij kiest de tabel niet meer zelf het aantal
+            # decimalen; daarom staat het hier ook voor deze twee kolommen.
+            "Panelen (kWp)": st.column_config.NumberColumn(format="%.2f"),
+            "Batterij (kWh)": st.column_config.NumberColumn(format="%.1f"),
             "Kosten (€/jaar)": st.column_config.NumberColumn(format="%.0f", help=bij_uitkomst("kosten")),
-            "Besparing (€/jaar)": st.column_config.NumberColumn(format="%.0f", help=_T_O_V_BASELINE + bij_uitkomst("besparing")),
-            "Meerinvestering (€)": st.column_config.NumberColumn(format="%.0f", help=_T_O_V_BASELINE + bij_uitkomst("meerinvestering")),
-            "Terugverdientijd (jaar)": st.column_config.NumberColumn(format="%.1f", help=_T_O_V_BASELINE + bij_uitkomst("terugverdientijd")),
-            "Netto voordeel (€)": st.column_config.NumberColumn(format="%.0f", help=_T_O_V_BASELINE + bij_uitkomst("netto_voordeel")),
-            "Dagen off-grid": st.column_config.NumberColumn(format="%d", help=bij_uitkomst("offgrid_dagen")),
+            "Besparing (€/jaar)": st.column_config.NumberColumn(format="%.0f", help=bij_uitkomst("besparing")),
+            "Investering (€)": st.column_config.NumberColumn(format="%.0f", help=bij_uitkomst("meerinvestering")),
+            "Terugverdientijd (jaar)": st.column_config.NumberColumn(format="%.1f", help=bij_uitkomst("terugverdientijd")),
+            "Netto voordeel (€)": st.column_config.NumberColumn(format="%.0f", help=bij_uitkomst("netto_voordeel")),            "Dagen off-grid": st.column_config.NumberColumn(format="%d", help=bij_uitkomst("offgrid_dagen")),
             "Zelfvoorzienend (%)": st.column_config.NumberColumn(format="%.0f", help=bij_uitkomst("zelfvoorzienend")),
             "Eigen verbruik zon (%)": st.column_config.NumberColumn(format="%.0f", help=bij_uitkomst("eigen_verbruik")),
             "Afname (kWh)": st.column_config.NumberColumn(format="%.0f", help=bij_uitkomst("afname")),
@@ -2580,7 +2613,10 @@ def main() -> None:
     if start or "uitkomst" not in st.session_state:
         with st.spinner("Simulatie draait…"):
             st.session_state["uitkomst"] = voer_uit(cfg.kopie(), weer, prijzen, onbalans)
-            st.session_state["referentie"] = voer_uit(zonder_batterij(cfg), weer, prijzen)
+            # De referentie: de installatie zonder investering, dus met alleen
+            # wat er al is. Heeft ze een batterij die al in bezit is en op de
+            # onbalansmarkt handelt, dan zijn ook daar de onbalansprijzen nodig.
+            st.session_state["referentie"] = voer_uit(zonder_investering(cfg), weer, prijzen, onbalans)
             st.session_state["uitkomst_json"] = nu_json
     uit: Uitkomst = st.session_state["uitkomst"]
     ref: Uitkomst = st.session_state["referentie"]
@@ -2600,7 +2636,7 @@ def main() -> None:
                 st.warning("De instellingen zijn gewijzigd sinds deze simulatie. Klik bovenaan op 'Herbereken alles'.")
             toon()
     with tabs[5]:
-        toon_scenarios(uit, weer, prijzen, verouderd)
+        toon_scenarios(uit, ref, weer, prijzen, verouderd)
 
 
 main()

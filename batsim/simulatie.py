@@ -1046,9 +1046,50 @@ def simuleer(cfg: Config, prof: Profielen) -> Uitkomst:
 
 
 def zonder_batterij(cfg: Config) -> Config:
-    """Geeft dezelfde instelling zonder batterij: de referentie voor elke vergelijking."""
+    """Geeft dezelfde instelling zonder batterij.
+
+    Was de referentie voor elke vergelijking; dat is nu
+    ``zonder_investering``. Deze functie blijft voor de tests en voor wie de
+    batterij alleen wil wegdenken.
+    """
     referentie = cfg.kopie()
     referentie.batterij.aanwezig = False
+    return referentie
+
+
+def zonder_investering(cfg: Config) -> Config:
+    """Geeft de instelling met alleen wat er al is: de referentie voor elke vergelijking.
+
+    Waarom dit bestaat:
+        De vraag van de app is "loont wat ik wil aanschaffen?". Het eerlijke
+        nulpunt is dan de installatie zoals ze nu is, zonder iets te kopen:
+        alleen de panelen en de batterij die al in bezit zijn. De investering
+        die daartegenover staat is het hele bedrag dat nog moet worden
+        uitgegeven (``resultaat.investering`` geeft voor deze referentie
+        nul), en de besparing is wat al die aankopen samen opleveren.
+
+        Afgewezen: de referentie "dezelfde installatie zonder batterij", zoals
+        eerder. Wie ook panelen koopt, zag dan alleen de kosten en de
+        opbrengst van de batterij; de panelen stonden wel bij de investering
+        maar deden niet mee in de terugverdientijd.
+
+    Wat er overblijft:
+        - Panelen: per veld alleen de panelen die al in bezit zijn.
+        - Batterij: alleen als er al capaciteit in bezit is én de omvormers
+          erbij er al zijn, en dan met de capaciteit die in bezit is. Een
+          batterij zonder omvormer kan niets; die telt als afwezig.
+
+    Wie alles al heeft, krijgt hier dezelfde instelling terug: er valt dan
+    niets te investeren en dus ook niets te besparen.
+    """
+    referentie = cfg.kopie()
+    for veld in referentie.zon.velden:
+        veld.aantal_panelen = min(veld.aantal_panelen, veld.panelen_in_bezit)
+    b = referentie.batterij
+    if b.aanwezig and b.in_bezit_kwh > 0 and b.omvormers_in_bezit:
+        b.capaciteit_kwh = min(b.capaciteit_kwh, b.in_bezit_kwh)
+    else:
+        b.aanwezig = False
     return referentie
 
 

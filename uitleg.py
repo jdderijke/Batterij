@@ -71,8 +71,8 @@ def _uitkomst(wat: str, periode: str, lezen: str) -> str:
 # overal letterlijk hetzelfde zeggen.
 _JAAR = "over het hele gesimuleerde jaar (1 januari tot en met 31 december van het jaar dat bij Instellingen in het blok Algemeen is gekozen)"
 _VERSCHIL = (
-    "Het kleine getal eronder is het verschil met precies dezelfde installatie zonder batterij "
-    "(zelfde huis, panelen, auto en tarieven)."
+    "Het kleine getal eronder is het verschil met de installatie zonder investering: zelfde huis, auto en tarieven, "
+    "maar met alleen de panelen en de batterij die je al hebt en zonder wat je nog moet aanschaffen."
 )
 _FASE_KEUZE = (
     "Een huis met een driefasige aansluiting heeft drie stroomdraden (L1, L2 en L3), elk met een eigen zekering. "
@@ -461,8 +461,8 @@ VELDEN: dict[str, str] = {
     # ----------------------------------------------------------------- Batterij
     "Batterij.aanwezig": _veld(
         "Een thuisbatterij slaat stroom op om die later te gebruiken: zonnestroom van overdag voor de avond, of goedkope stroom voor dure uren.",
-        "Aan om een batterij door te rekenen. De app rekent daarnaast altijd dezelfde installatie zonder batterij door, "
-        "zodat je het verschil ziet. Uit als je alleen de installatie zonder batterij wilt bekijken.",
+        "Aan om een batterij door te rekenen. De app rekent daarnaast altijd de installatie zonder investering door "
+        "(alleen wat je al hebt), zodat je het verschil ziet. Uit als je alleen de installatie zonder batterij wilt bekijken.",
         "Op de afname van en teruglevering aan het net, de stroomkosten en de investering.",
     ),
     "Batterij.topologie": _veld(
@@ -1095,7 +1095,7 @@ VELDEN: dict[str, str] = {
         "Aan als je een batterij hebt of wilt. Uit om te rekenen zonder batterij, bijvoorbeeld om eerst te zien wat het huis "
         "met alleen panelen, warmtepomp en auto verbruikt en kost.",
         "Op de schakelaar 'Aanwezig' van het blok Batterij en omvormers. Met 'uit' rekent de simulatie zonder batterij; "
-        "het Overzicht toont dan geen verschil meer met 'zonder batterij', want dat is dan dezelfde installatie. "
+        "het Overzicht vergelijkt dan alleen nog de panelen die je wilt aanschaffen met wat je al hebt. "
         "De instellingen van de batterij blijven bewaard.",
     ),
     "Snelstart.strategie": _veld(
@@ -1199,31 +1199,35 @@ UITKOMSTEN: dict[str, str] = {
         "Let op het verschil met 'zelfvoorzienend': dit getal kijkt naar je zonnestroom, het andere naar je verbruik. " + _VERSCHIL,
     ),
     "besparing": _uitkomst(
-        "Hoeveel lager de stroomkosten zijn dankzij de batterij: de stroomkosten zonder batterij min de stroomkosten met batterij.",
+        "Hoeveel lager de stroomkosten zijn dankzij wat je aanschaft (panelen, batterij, omvormers): de stroomkosten zonder investering "
+        "min de stroomkosten met. 'Zonder investering' is de installatie met alleen wat je al hebt.",
         "Euro per jaar, berekend uit het gesimuleerde jaar. Het weer en de prijzen van een ander jaar geven een ander bedrag.",
-        "Hoger is beter. Een negatief bedrag betekent dat de batterij geld kost, bijvoorbeeld door haar verliezen en stand-by verbruik. "
-        "Dit bedrag moet de investering terugverdienen.",
+        "Hoger is beter. Een negatief bedrag betekent dat de aanschaf geld kost, bijvoorbeeld door de verliezen en het stand-by verbruik "
+        "van een batterij. Dit bedrag moet de investering terugverdienen. Hoef je niets aan te schaffen, dan is het nul.",
     ),
+    # De sleutel heet nog "meerinvestering" (zo heet het getal in de rekenkern,
+    # zie ``resultaat.vergelijk``); op het scherm staat "Investering".
     "meerinvestering": _uitkomst(
-        "Wat de batterij met haar omvormers extra kost, vergeleken met dezelfde installatie zonder batterij. "
-        "De zonnepanelen tellen hier niet mee: die liggen er in beide gevallen. Wat je als 'al in bezit' hebt opgegeven, is er afgetrokken.",
+        "Alles wat je voor deze installatie nog moet aanschaffen: nieuwe zonnepanelen, omvormers en de batterij. "
+        "Wat je als 'al in bezit' hebt opgegeven, telt niet mee.",
         "Euro, eenmalig (geen bedrag per jaar).",
-        "Bij een hybride opstelling is de uitgespaarde losse PV-omvormer er al vanaf getrokken. "
-        "Is dit bedrag nul of negatief, dan kost de batterij je niets extra. De posten staan hieronder bij 'Investering'.",
+        "Het is hetzelfde bedrag als 'Totaal' bij de posten van de investering; daar staat waaruit het bestaat. "
+        "Is dit bedrag nul, dan hoef je niets te kopen en valt er ook niets terug te verdienen. "
+        "Op het tabblad Scenario's heeft elk scenario de investering van de baseline plus of min wat het meer of minder kost.",
     ),
     "terugverdientijd": _uitkomst(
-        "Na hoeveel jaar de besparing de meerinvestering heeft terugbetaald: meerinvestering gedeeld door besparing per jaar.",
-        "Jaren. Een streepje betekent: nooit, want de batterij bespaart niets of kost geld.",
-        "Korter is beter. Vergelijk het met de verwachte levensduur van de batterij (10 tot 15 jaar): ligt de terugverdientijd daarboven, "
-        "dan verdien je de batterij niet terug. Er is geen rekening gehouden met rente, veranderende prijzen of slijtage van de batterij.",
+        "Na hoeveel jaar de besparing de investering heeft terugbetaald: investering gedeeld door besparing per jaar.",
+        "Jaren. Een streepje betekent: nooit, want de aanschaf bespaart niets of kost geld.",
+        "Korter is beter. Vergelijk het met de verwachte levensduur (een batterij 10 tot 15 jaar, panelen langer): ligt de terugverdientijd "
+        "daarboven, dan verdien je de aanschaf niet terug. Er is geen rekening gehouden met rente, veranderende prijzen of slijtage.",
     ),
     "netto_voordeel": _uitkomst(
-        "Wat je aan het eind van de rekenperiode per saldo overhoudt. De som is: besparing per jaar × aantal jaren − meerinvestering. "
-        "De besparing per jaar is wat je minder aan stroom betaalt dan met je huidige panelen zonder batterij; de meerinvestering is wat je "
-        "daarvoor extra moet aanschaffen (wat je al hebt, telt niet mee). De hele aanschaf wordt dus binnen de rekenperiode terugverdiend "
-        "of niet: na afloop is de installatie in deze som niets meer waard.",
+        "Wat je aan het eind van de rekenperiode per saldo overhoudt. De som is: besparing per jaar × aantal jaren − investering. "
+        "De besparing per jaar is wat je minder aan stroom betaalt dan zonder investering (met alleen wat je al hebt); de investering is "
+        "alles wat je daarvoor moet aanschaffen (wat je al hebt, telt niet mee). De hele aanschaf wordt dus binnen de rekenperiode "
+        "terugverdiend of niet: na afloop is de installatie in deze som niets meer waard.",
         "Euro, over de hele rekenperiode die bij Instellingen onder 'Investering' staat (standaard 15 jaar; niet per jaar).",
-        "Positief betekent dat de batterij zichzelf binnen de rekenperiode terugbetaalt en dit bedrag overhoudt. "
+        "Positief betekent dat de aanschaf zichzelf binnen de rekenperiode terugbetaalt en dit bedrag overhoudt. "
         "Negatief betekent dat je er in die periode geld op toelegt. Dit is het getal om scenario's op te vergelijken.\n\n"
         "**Wat zit er niet in?** Het is een eenvoudige som. "
         "Geen restwaarde: een installatie die na de rekenperiode nog werkt, telt niet mee (dat maakt de uitkomst wat te somber). "
@@ -1306,8 +1310,8 @@ UITKOMSTEN: dict[str, str] = {
     "inv_totaal": _uitkomst(
         "De optelsom van alle posten hiernaast: alles wat je voor deze installatie nog moet aanschaffen.",
         "Euro, eenmalig.",
-        "Dit is inclusief nieuwe zonnepanelen. De 'Meerinvestering' hierboven is alleen het deel dat door de batterij komt, "
-        "en is dus lager als je ook panelen koopt.",
+        "Dit is inclusief nieuwe zonnepanelen. Het is hetzelfde bedrag als 'Investering' bij 'Loont de investering?' hierboven; "
+        "daarmee worden de terugverdientijd en het netto voordeel berekend.",
     ),
     # --------------------------------------------------- Fasen en load balancing
     "max_stroom": _uitkomst(

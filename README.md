@@ -34,8 +34,9 @@ versienummer linksboven in de zijbalk.
 De simulatie loopt een heel jaar door in stappen van 1 tot 60 minuten. In
 elke stap maakt ze per fase de balans op: wat het huis verbruikt, wat de
 panelen opwekken, wat de batterij doet en wat er dan over de hoofdaansluiting
-loopt. Dezelfde berekening draait ook een keer **zonder batterij**; het
-verschil tussen die twee is wat de batterij oplevert.
+loopt. Dezelfde berekening draait ook een keer **zonder investering**: met
+alleen de panelen en de batterij die je al hebt. Het verschil tussen die twee
+is wat de aanschaf van panelen en batterij oplevert.
 
 **Echte data.** Temperatuur en zonnestraling komen uit de uurgegevens van het
 [KNMI](https://www.daggegevens.knmi.nl/klimatologie/uurgegevens) (veertien
@@ -261,19 +262,22 @@ Het tabblad op de afbeelding bovenaan deze pagina. Het heeft drie
 sub-tabbladen: **Cijfers**, **Grafieken** en **Tabel**.
 
 Op **Cijfers** gaan alle getallen over het hele jaar. Het kleine getal onder
-een waarde is het verschil met dezelfde installatie zonder batterij.
+een waarde is het verschil met de installatie zonder investering: wat je nu
+al hebt, zonder wat je nog moet aanschaffen.
 
 - **Stroom en kosten** – stroomkosten, afname, teruglevering, zelfvoorziening
   en eigen verbruik van zonnestroom.
-- **Loont de batterij?** – besparing per jaar, meerinvestering,
-  terugverdientijd en netto voordeel over de levensduur. Een negatief netto
-  voordeel betekent dat de batterij zichzelf in die tijd niet terugverdient.
+- **Loont de investering?** – besparing per jaar, de investering (alles wat
+  je nog moet aanschaffen: panelen, omvormers en batterij), terugverdientijd
+  en netto voordeel over de levensduur. Een negatief netto voordeel betekent
+  dat de aanschaf zichzelf in die tijd niet terugverdient. Heb je alles al,
+  dan valt er niets te investeren en zijn deze getallen nul.
 - **Zon, verbruik en pieken** – de zonneproductie, het totale verbruik, de
   hoogste kwartierpiek en hoeveel zonnestroom verloren ging.
 - **Investering** – de eenmalige kosten per onderdeel.
 
 Op **Grafieken** staat het verloop per maand: het verbruik, de zon met afname
-en teruglevering, en de stroomkosten met en zonder batterij. Op **Tabel**
+en teruglevering, en de stroomkosten met en zonder de investering. Op **Tabel**
 staan dezelfde maandcijfers als getallen.
 
 ### Tijdverloop
@@ -320,9 +324,8 @@ Rekent in één keer meerdere varianten door en zet ze naast elkaar. Het
 uitgangspunt is de **baseline**: de instellingen van de laatste berekening.
 Bovenaan het tabblad staat wat daarin zit (panelen, batterij, topologie,
 omvormers en strategie). Elk scenario is de baseline met een of meer
-onderdelen vervangen door een alternatief, en wordt met de baseline
-vergeleken. Zijn de instellingen gewijzigd, klik dan eerst op **Herbereken
-alles**.
+onderdelen vervangen door een alternatief. Zijn de instellingen gewijzigd,
+klik dan eerst op **Herbereken alles**.
 
 1. Vul bij **aantal panelen** een of meer factoren in: 0.5 is de helft van de
    panelen van de baseline, 1.5 is anderhalf keer zoveel. Decimalen met een
@@ -340,9 +343,17 @@ velden beginnen leeg; een veld dat je leeg laat, blijft zoals in de baseline.
 Kies je bijvoorbeeld alleen een andere strategie, dan wordt er precies één
 scenario doorgerekend: de baseline met die strategie.
 
-De grafiek toont het netto voordeel over de levensduur ten opzichte van de
-baseline, met de beste variant bovenaan: groen is beter dan de baseline, rood
-is slechter. De tabel eronder geeft per variant
+Het vaste punt van de vergelijking is de baseline. Ze staat zelf in de
+uitkomst, met de besparing, de investering en de terugverdientijd van het
+Overzicht. Een scenario heeft de investering van de baseline plus of min
+wat het meer of minder kost, en de besparing van de baseline plus of min wat
+het per jaar meer of minder bespaart; daaruit volgen zijn eigen
+terugverdientijd en netto voordeel.
+
+De grafiek toont het netto voordeel over de levensduur, met de beste variant
+bovenaan: de baseline is grijs, groen is beter dan de baseline, rood is
+slechter. In de tabel eronder is de rij van de baseline grijs; de tabel geeft
+per variant
 de kosten, de besparing en de investering; ga met de muis op een kolomkop
 staan voor uitleg.
 
