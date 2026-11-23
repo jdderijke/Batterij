@@ -49,6 +49,11 @@ datas = [
     # De meegeleverde onbalansprijzen van TenneT, één bestand per jaar (zie
     # batsim/data.py). Een nieuw jaar in de map gaat vanzelf mee.
     ("onbalans/*.csv", "onbalans"),
+    # De handleiding achter de knop "Handleiding" in de app, met de
+    # schermafbeeldingen waar ze naar verwijst (zie ``handleiding_venster`` in
+    # app.py).
+    ("README.md", "."),
+    ("docs/screenshots/*.png", "docs/screenshots"),
     *st_data,
     *collect_data_files("plotly"),
     # Pakketten die bij het starten hun eigen versie opvragen.
@@ -79,6 +84,7 @@ a = Analysis(
         "batsim.resultaat",
         "batsim.scenario",
         "batsim.simulatie",
+        "batsim.snelstart",
         "plotly.graph_objects",
         "plotly.subplots",
     ],

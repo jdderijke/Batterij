@@ -8,6 +8,7 @@ Waarom dit bestaat:
 
 Opbouw (elke module heeft één onderwerp):
     config      alle instellingen, als dataclasses met standaardwaarden
+    snelstart   de meeste instellingen afleiden uit een paar gewone vragen
     data        KNMI-weer en day-ahead-prijzen ophalen en lokaal bewaren;
                 onbalansprijzen van TenneT inlezen
     zon         zonopbrengst uit KNMI-straling

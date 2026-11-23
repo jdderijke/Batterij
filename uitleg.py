@@ -23,7 +23,9 @@ Sleutels:
     Invoervelden heten ``Klasse.veldnaam``, precies zoals in
     ``batsim/config.py`` (bijvoorbeeld ``Batterij.capaciteit_kwh``). De
     invoervelden van het tabblad Scenario's, die geen veld in de Config zijn,
-    heten ``Scenario.<naam>``. Uitkomsten hebben een korte eigen naam.
+    heten ``Scenario.<naam>``. De vragen van het snelstartvenster heten
+    ``Snelstart.<veldnaam>``, naar de dataclass in ``batsim/snelstart.py``.
+    Uitkomsten hebben een korte eigen naam.
 """
 
 from __future__ import annotations
@@ -67,7 +69,7 @@ def _uitkomst(wat: str, periode: str, lezen: str) -> str:
 
 # Twee zinnen die bij veel uitkomsten terugkomen; één keer geschreven zodat ze
 # overal letterlijk hetzelfde zeggen.
-_JAAR = "over het hele gesimuleerde jaar (1 januari tot en met 31 december van het jaar dat in de zijbalk is gekozen)"
+_JAAR = "over het hele gesimuleerde jaar (1 januari tot en met 31 december van het jaar dat bij Instellingen in het blok Algemeen is gekozen)"
 _VERSCHIL = (
     "Het kleine getal eronder is het verschil met precies dezelfde installatie zonder batterij "
     "(zelfde huis, panelen, auto en tarieven)."
@@ -920,35 +922,225 @@ VELDEN: dict[str, str] = {
         "Er wordt geen rekening gehouden met rente, prijsstijgingen of een batterij die langzaam slechter wordt.",
     ),
     # ---------------------------------------------------------------- Scenario's
+    # Bij de scenario's is elk veld een lijst alternatieven voor de baseline (de
+    # instellingen van de laatste berekening). De waarde van de baseline doet
+    # altijd mee en hoeft dus nergens te worden ingevuld; zie batsim/scenario.py.
     "Scenario.capaciteiten": _veld(
-        "De batterijgroottes die je naast elkaar wilt doorrekenen.",
+        "De batterijgroottes die je naast de batterij van de baseline wilt doorrekenen. "
+        "Dit veld is er alleen als de batterij bij Instellingen aan staat.",
         "Getallen in kWh, gescheiden door komma's, bijvoorbeeld: 0, 5, 10, 15, 20. Met 0 wordt ook 'geen batterij' meegenomen. "
-        "Gebruik een punt voor decimalen (7.5).",
-        "Elke grootte wordt een eigen scenario. Zo zie je bij welke grootte de extra besparing niet meer opweegt tegen de extra kosten.",
+        "Gebruik een punt voor decimalen (7.5). De grootte van de baseline mag in de lijst staan, maar levert geen extra scenario op. "
+        "Laat het veld leeg om de batterijgrootte niet te variëren.",
+        "Elke andere grootte wordt een eigen scenario. Zo zie je bij welke grootte de extra besparing niet meer opweegt tegen de extra kosten.",
     ),
     "Scenario.factoren": _veld(
-        "Hoeveel zonnepanelen je wilt doorrekenen, als veelvoud van wat nu bij Instellingen staat.",
-        "Getallen gescheiden door komma's: 1 = het huidige aantal, 0.5 = de helft, 1.5 = anderhalf keer zoveel, 2 = het dubbele. "
-        "Gebruik een punt voor decimalen.",
+        "Hoeveel zonnepanelen je wilt doorrekenen, als veelvoud van het aantal in de baseline. "
+        "Dit veld is er alleen als de zonnepanelen bij Instellingen aan staan.",
+        "Getallen gescheiden door komma's: 0.5 = de helft, 1.5 = anderhalf keer zoveel, 2 = het dubbele. "
+        "Gebruik een punt voor decimalen. 1 is de baseline zelf; die mag in de lijst staan, maar levert geen extra scenario op. "
+        "Laat het veld leeg om het aantal panelen niet te variëren.",
         "Elk veld krijgt dat veelvoud aan panelen (afgerond op hele panelen). Wat je al in bezit hebt blijft gelijk; "
         "alleen extra panelen tellen mee als investering.",
     ),
     "Scenario.topologieen": _veld(
-        "Of je één batterij met drie omvormers wilt doorrekenen, drie losse batterijen, of beide.",
-        "Kies er één of meer. Zie de uitleg bij 'Topologie' op het tabblad Instellingen.",
-        "Elke keuze verdubbelt het aantal scenario's met een batterij.",
+        "De andere opstelling dan die van de baseline: één batterij met drie omvormers, of drie losse batterijen.",
+        "Vink de keuze aan om haar als alternatief mee te rekenen; laat het veld leeg om de topologie van de baseline te houden. "
+        "De topologie van de baseline staat niet in de lijst. Zie de uitleg bij 'Topologie' op het tabblad Instellingen.",
+        "Aanvinken verdubbelt het aantal scenario's met een batterij.",
     ),
     "Scenario.koppelingen": _veld(
-        "Of je aparte omvormers (AC-gekoppeld) wilt doorrekenen, een hybride opstelling, of beide.",
-        "Kies er één of meer. Zie de uitleg bij 'Omvormers' op het tabblad Instellingen.",
-        "Elke keuze verdubbelt het aantal scenario's met een batterij. De investering verschilt per keuze.",
+        "De andere omvormers dan die van de baseline: aparte omvormers (AC-gekoppeld) of een hybride opstelling.",
+        "Vink de keuze aan om haar als alternatief mee te rekenen; laat het veld leeg om de omvormers van de baseline te houden. "
+        "De omvormers van de baseline staan niet in de lijst. Zie de uitleg bij 'Omvormers' op het tabblad Instellingen.",
+        "Aanvinken verdubbelt het aantal scenario's met een batterij. De investering verschilt per keuze.",
     ),
     "Scenario.strategieen": _veld(
-        "Voor welk doel de batterij wordt ingezet: eigen verbruik, piek shaving, handel op uurprijzen of handel op de onbalansmarkt.",
-        "Kies er één of meer. Zie de uitleg bij 'Strategie' op het tabblad Instellingen.",
-        "Elke keuze vermenigvuldigt het aantal scenario's met een batterij. Handel rekent het langst.",
+        "De andere doelen waarvoor de batterij kan worden ingezet dan dat van de baseline: eigen verbruik, piek shaving, "
+        "handel op uurprijzen of handel op de onbalansmarkt.",
+        "Kies er geen, één of meer; laat het veld leeg om de strategie van de baseline te houden. "
+        "De strategie van de baseline staat niet in de lijst. Zie de uitleg bij 'Strategie' op het tabblad Instellingen.",
+        "Elke keuze voegt de scenario's met een batterij nog een keer toe, met die strategie. Kies je alleen hier iets, "
+        "dan is er precies één scenario per gekozen strategie. Handel rekent het langst.",
+    ),
+    # ---------------------------------------------------------------- Snelstart
+    # De vragen van het snelstartvenster (op het scherm: "Quick Start"). Bij
+    # "invloed" staat steeds welke instelling uit het antwoord wordt afgeleid,
+    # met de naam die ze op het tabblad Instellingen heeft, zodat ze daar
+    # terug te vinden is. Jaar en KNMI-station zijn geen afgeleide kentallen
+    # maar dezelfde velden als in het blok Algemeen; ze delen daarom de uitleg
+    # van die velden (zie onder deze lijst).
+    "Snelstart.woningtype": _veld(
+        "Hoe het huis tussen de buren staat. Een huis dat aan alle kanten vrij staat heeft veel meer buitenmuur en dak "
+        "dan een huis met buren aan weerszijden, en verliest daardoor meer warmte.",
+        "Het soort huis dat het best past. Een appartement telt als een woning met buren boven, onder en opzij. "
+        "Een geschakelde woning (alleen met de garage aan de buren vast) lijkt het meest op een twee-onder-een-kap.",
+        "Op 'Buitenoppervlak ÷ vloeroppervlak' in het blok Huis: van 0,9 voor een appartement tot 2,5 voor een vrijstaand huis. "
+        "Daarmee op het warmteverlies en op het verbruik van de warmtepomp.",
+    ),
+    "Snelstart.bouwjaar": _veld(
+        "Het jaar waarin het huis gebouwd is. Uit het bouwjaar volgt hoe goed er destijds geïsoleerd werd en hoe kierdicht er gebouwd werd.",
+        "Het bouwjaar uit de koopakte, het energielabel of de Basisregistratie (BAG). Een schatting op tien jaar is genoeg: "
+        "de grenzen liggen bij 1975, 1992, 2000 en 2015. Is het huis later geïsoleerd, geef dat dan aan bij de volgende vraag.",
+        "Op de 'Rc-waarde' (van 0,5 voor een huis van voor 1975 tot 5 voor nieuwbouw) en op de 'Luchtverversing' in het blok Huis. "
+        "Opent het venster met een ander jaar dan je eerder invulde, dan is dat het jaar dat bij de huidige Rc-waarde past.",
+    ),
+    "Snelstart.na_isolatie": _veld(
+        "Of het huis na de bouw beter geïsoleerd is: spouwmuurisolatie, dakisolatie, vloer- of bodemisolatie.",
+        "'Deels' als één of twee van de drie (gevel, dak, vloer) zijn aangepakt, 'grondig' als ze alle drie geïsoleerd zijn. "
+        "Nieuw glas telt hier niet mee; daarvoor is de vraag over het glas.",
+        "Op de 'Rc-waarde' in het blok Huis: 'deels' geeft minstens 2,0 en 'grondig' minstens 3,5. "
+        "Een huis dat van zichzelf al beter is, houdt de waarde van zijn bouwjaar. De luchtverversing verandert er niet door.",
+    ),
+    "Snelstart.bouwmateriaal": _veld(
+        "Waarvan de muren van het huis gemaakt zijn. Een zwaar huis van steen of beton houdt warmte lang vast; "
+        "een licht huis van hout warmt snel op en koelt snel af.",
+        "Houtskeletbouw voor huizen met een houten frame (veel prefab- en Scandinavische woningen). Steen voor het gewone "
+        "Nederlandse huis van baksteen of kalkzandsteen. Beton voor gegoten of geprefabriceerde betonwanden, zoals in veel flats.",
+        "Samen met de vraag over de vloeren op 'Warmteopslag in het gebouw' in het blok Huis: van 50 voor hout tot 150 voor beton. "
+        "Dat bepaalt wanneer de warmtepomp draait, niet hoeveel hij per jaar verbruikt.",
+    ),
+    "Snelstart.vloeren": _veld(
+        "Waarvan de vloeren tussen de verdiepingen en op de begane grond gemaakt zijn. Betonnen vloeren zijn zwaar en slaan veel warmte op.",
+        "Betonnen vloeren bij de meeste huizen van na ongeveer 1970 en bij alle huizen met vloerverwarming in een dekvloer. "
+        "Houten vloeren (balken met planken of platen) bij oudere huizen. Zijn ze gemengd, kies dan wat op de begane grond ligt.",
+        "Samen met de vraag over het bouwmateriaal op 'Warmteopslag in het gebouw' in het blok Huis: betonnen vloeren tellen er 20 bij op. "
+        "Voor de jaarkosten maakt het weinig uit.",
+    ),
+    "Snelstart.glas": _veld(
+        "Het soort glas in de ramen. Door glas lekt veel meer warmte weg dan door een geïsoleerde muur, "
+        "en het verschil tussen oud en nieuw glas is groot.",
+        "Het glas in de meeste ramen. Het soort staat vaak in de metalen strip tussen de ruiten gestempeld (HR++ of een jaartal). "
+        "Dubbel glas van voor ongeveer 2000 is meestal gewoon dubbel glas; daarna is het bijna altijd HR++.",
+        "Op de 'U-waarde van de ramen' in het blok Huis, met het kozijn meegerekend: enkel glas 5,8, dubbel glas 2,9, HR++ 1,4 en triple glas 0,9. "
+        "Daarmee op het warmteverlies en op het verbruik van de warmtepomp.",
+    ),
+    "Snelstart.oppervlak_m2": _veld(
+        "Het deel van het huis dat je in de winter verwarmt, alle verdiepingen bij elkaar opgeteld.",
+        "Het woonoppervlak uit de verkoopadvertentie of het energielabel, zonder onverwarmde garage, schuur of zolder. "
+        "Rijtjeshuis 100 tot 140 m², vrijstaand huis 150 tot 250 m². Een schatting op 10 m² is genoeg.",
+        "Op 'Vloeroppervlak' in het blok Huis, en op 'Raamoppervlak': daarvoor rekent Quick Start een zesde van het vloeroppervlak. "
+        "Via het warmteverlies ook op het vermogen van de warmtepomp.",
+    ),
+    "Snelstart.wtw": _veld(
+        "Een WTW-unit (ook 'balansventilatie') is een ventilatiekast die de koude verse lucht voorverwarmt met de warme lucht die het huis verlaat. "
+        "Je herkent hem aan een kast met vier dikke luchtbuizen en aan inblaasventielen in de woon- en slaapkamers.",
+        "Aan als je zo'n unit hebt. De meeste bestaande huizen hebben er geen: die hebben alleen afzuiging in keuken, badkamer en toilet. "
+        "Bij nieuwbouw na ongeveer 2010 is een WTW-unit gebruikelijk.",
+        "Op 'WTW-unit aanwezig' in het blok Huis. Met een WTW-unit daalt het ventilatieverlies sterk, "
+        "en daarmee het verbruik en het benodigde vermogen van de warmtepomp.",
+    ),
+    "Snelstart.personen": _veld(
+        "Het aantal mensen dat in het huis woont. Bewoners geven zelf warmte af en gebruiken warm water.",
+        "Het aantal vaste bewoners, kinderen meegeteld. Wie maar een deel van de week thuis is, telt voor de helft; rond af op een heel getal.",
+        "Op 'Warmte van bewoners en apparaten' in het blok Huis (200 W plus 50 W per persoon) en, als er een warmtepomp is, "
+        "op 'Tapwater' in het blok Warmtepomp (1,75 kWh warmte per persoon per dag). De huishoudelijke apparaten veranderen er niet door.",
+    ),
+    "Snelstart.warmtepomp": _veld(
+        "Een warmtepomp verwarmt het huis met stroom in plaats van gas. Hij is 's winters de grootste stroomverbruiker in huis, "
+        "juist op momenten dat zonnepanelen weinig leveren.",
+        "Aan als je een volledig elektrische warmtepomp hebt of er een wilt doorrekenen. "
+        "Uit als je met gas of stadsverwarming stookt; de verwarming telt dan niet mee in het stroomverbruik.",
+        "Op de schakelaar 'Aanwezig' van het blok Warmtepomp. Staat hij aan, dan rekent Quick Start ook het 'Geleverd vermogen' uit: "
+        "het warmteverlies van het huis bij -10 °C buiten plus 20%, afgerond naar boven op hele kW.",
+    ),
+    "Snelstart.afgifte": _veld(
+        "Waarmee de warmte in de kamers wordt afgegeven. Vloerverwarming werkt met lauw water, gewone radiatoren hebben heet water nodig, "
+        "en hoe heter het water, hoe meer stroom de warmtepomp verbruikt.",
+        "Wat in het grootste deel van het huis ligt of hangt. Lagetemperatuurradiatoren zijn extra grote radiatoren of convectoren "
+        "met een ventilator, speciaal bedoeld voor een warmtepomp. Vloerverwarming beneden en radiatoren boven: kies de radiatoren.",
+        "Op 'Aanvoertemperatuur' en 'COP bij 7 °C buiten' in het blok Warmtepomp: vloerverwarming 35 °C met COP 4,5, "
+        "lagetemperatuurradiatoren 45 °C met COP 3,6, gewone radiatoren 55 °C met COP 3,0.",
+    ),
+    "Snelstart.zonnepanelen": _veld(
+        "Of er zonnepanelen zijn: panelen die je al hebt, of panelen die je wilt doorrekenen voordat je ze koopt.",
+        "Aan als je panelen hebt of wilt. Uit om te rekenen zonder panelen, bijvoorbeeld om te zien wat een batterij alleen met "
+        "handel op uurprijzen oplevert, of wat de panelen zelf bijdragen (reken dan een keer met en een keer zonder).",
+        "Op de schakelaar 'Aanwezig' van het blok Zonnepanelen. Met 'uit' rekent de simulatie alsof er geen panelen liggen; "
+        "de velden die er stonden blijven bewaard, zodat weer aanzetten geen invoer kost.",
+    ),
+    "Snelstart.panelen": _veld(
+        "Het aantal zonnepanelen dat je hebt of wilt doorrekenen.",
+        "Het aantal panelen op het dak, of het aantal uit een offerte. Op een gewoon rijtjeshuis passen 8 tot 14 panelen, "
+        "op een vrijstaand huis vaak 20 of meer. Wil je zonder panelen rekenen, zet dan de schakelaar hiernaast uit.",
+        "Op het blok Zonnepanelen: Quick Start maakt er één veld van (of twee bij oost en west) en vervangt de velden die er stonden. "
+        "Vermogen per paneel, helling en fase blijven zoals ze in het eerste veld stonden.",
+    ),
+    "Snelstart.richting": _veld(
+        "De kant waar de panelen naartoe wijzen. Panelen op het zuiden leveren het meest; op oost en west ongeveer 15 tot 20% minder, "
+        "maar meer verspreid over de dag.",
+        "De kompasrichting van het dakvlak met de panelen. Liggen ze op twee kanten van het dak, kies dan 'Oost en west': "
+        "de panelen worden gelijk over de twee kanten verdeeld. Andere verdelingen stel je in op het tabblad Instellingen.",
+        "Op de kolom 'Richting' van de velden in het blok Zonnepanelen (oost 90°, zuid 180°, west 270°), "
+        "en daarmee op de opbrengst en op het uur van de dag waarop de panelen het meest leveren.",
+    ),
+    "Snelstart.panelen_in_bezit": _veld(
+        "Of de panelen er al liggen, of dat je ze nog moet kopen.",
+        "Aan als alle panelen die je hierboven invulde al op het dak liggen. Uit als je ze nog wilt aanschaffen. "
+        "Heb je er al een deel, laat dit dan uit en vul het aantal na Quick Start in bij het blok Zonnepanelen.",
+        "Op de kolom 'Waarvan al in bezit' in het blok Zonnepanelen. Wat al in bezit is, telt niet mee in de investering; "
+        "de terugverdientijd gaat dan alleen over wat erbij komt, zoals de batterij.",
+    ),
+    "Snelstart.netcongestie": _veld(
+        "Op zonnige middagen leveren alle panelen in de straat tegelijk terug. De netspanning stijgt dan, en boven 253 V schakelt een "
+        "omvormer zichzelf uit. Je merkt het aan een omvormer die midden op een zonnige dag op storing staat, "
+        "of aan gaten in de opbrengstgrafiek van zijn app.",
+        "Aan als je panelen bij zonnig weer regelmatig afschakelen, of als je wilt zien wat dat zou kosten. "
+        "Uit als je er geen last van hebt; dat geldt voor de meeste huizen.",
+        "Op de schakelaar 'Meenemen' van het blok Netcongestie. De waarden in dat blok blijven zoals ze zijn; de standaardwaarden "
+        "beschrijven een zwaar geval, dus stel ze daar bij als het bij jou meevalt. Of de batterij de panelen aan het net houdt, "
+        "kies je bij 'Batterij en omvormers'.",
+    ),
+    "Snelstart.batterij": _veld(
+        "Of er een thuisbatterij is: een batterij die je al hebt, of een die je wilt doorrekenen voordat je hem koopt.",
+        "Aan als je een batterij hebt of wilt. Uit om te rekenen zonder batterij, bijvoorbeeld om eerst te zien wat het huis "
+        "met alleen panelen, warmtepomp en auto verbruikt en kost.",
+        "Op de schakelaar 'Aanwezig' van het blok Batterij en omvormers. Met 'uit' rekent de simulatie zonder batterij; "
+        "het Overzicht toont dan geen verschil meer met 'zonder batterij', want dat is dan dezelfde installatie. "
+        "De instellingen van de batterij blijven bewaard.",
+    ),
+    "Snelstart.strategie": _veld(
+        "Het doel waarvoor de batterij wordt ingezet. Dat bepaalt wanneer ze laadt en ontlaadt, en daarmee wat ze oplevert.",
+        "Eigen verbruik: zonnestroom van overdag bewaren voor de avond; de gewone keuze bij panelen. Piek shaving: de afname van het net "
+        "onder een grens houden. Handel op uurprijzen: goedkoop laden en duur ontladen, met een dynamisch contract. "
+        "Handel op de onbalansmarkt: hetzelfde per kwartier, via een aanbieder als Zonneplan of Frank Energie.",
+        "Op 'Strategie' in het blok Batterij en omvormers. Wat bij een strategie hoort (de piekgrens, de slijtagekosten, "
+        "het deel van de aanbieder) blijft zoals het daar staat. Wil je strategieën naast elkaar zien, gebruik dan het tabblad Scenario's.",
+    ),
+    "Snelstart.batterij_kwh": _veld(
+        "De grootte van de thuisbatterij die je wilt doorrekenen, in kilowattuur (kWh): hoeveel stroom erin past.",
+        "De capaciteit uit een offerte, of een eerste gok: 5 tot 10 kWh voor een gewoon huishouden met panelen, "
+        "10 tot 20 kWh met een warmtepomp of elektrische auto erbij. Welke grootte het best uitkomt, vergelijk je daarna op het tabblad Scenario's.",
+        "Op 'Capaciteit totaal' in het blok Batterij en omvormers. Omvormers en laadsnelheid blijven zoals ze zijn; "
+        "kijk daar na Quick Start naar als je een heel andere grootte kiest.",
+    ),
+    "Snelstart.auto": _veld(
+        "Of er een elektrische auto is die thuis aan een laadpaal wordt geladen. Zo'n auto is vaak de grootste stroomverbruiker van het huis.",
+        "Aan als je thuis een elektrische auto laadt of dat wilt doorrekenen. Uit als je geen elektrische auto hebt, "
+        "of als je vrijwel alleen op het werk of onderweg laadt.",
+        "Op de schakelaar 'Aanwezig' van het blok Auto en laadpaal. De accu, de laadpaal en de laadstrategie blijven zoals ze daar staan.",
+    ),
+    "Snelstart.km_per_jaar": _veld(
+        "Hoeveel kilometer de auto per jaar rijdt. Daaruit volgt hoeveel stroom er thuis geladen moet worden.",
+        "De kilometers van een heel jaar, uit de verzekeringspolis, de leaseovereenkomst of de app van de auto. "
+        "Gemiddeld in Nederland is dat ongeveer 12.000 km; wie dagelijks ver forenst zit op 20.000 tot 30.000 km.",
+        "Op 'Km per werkdag' en 'Km per weekenddag' in het blok Auto en laadpaal. Quick Start verdeelt de kilometers zo dat "
+        "een weekenddag half zoveel telt als een werkdag; bij 18.800 km per jaar is dat 60 en 30 km.",
+    ),
+    "Snelstart.contract": _veld(
+        "Het soort stroomcontract. Bij een dynamisch contract verandert de prijs elk uur mee met de markt; "
+        "bij een vast (of variabel) contract betaal je dag en nacht hetzelfde bedrag per kWh.",
+        "Dynamisch als je per uur afrekent of dat overweegt (bijvoorbeeld Tibber, Frank Energie of Zonneplan). "
+        "Vast voor een gewoon contract met één prijs per kWh.",
+        "Op 'Contract' in het blok Tarieven. De prijzen en opslagen zelf blijven zoals ze daar staan. "
+        "Het contract bepaalt sterk wat een batterij verdient: handelen op uurprijzen kan alleen met een dynamisch contract.",
     ),
 }
+
+# Jaar en KNMI-station staan op twee plekken: in het blok Algemeen en in het
+# venster van Quick Start. Het zijn dezelfde velden, dus ze krijgen dezelfde
+# uitleg in plaats van een tweede tekst die ervan kan gaan afwijken.
+VELDEN["Snelstart.jaar"] = VELDEN["Algemeen.jaar"]
+VELDEN["Snelstart.knmi_station"] = VELDEN["Algemeen.knmi_station"]
 
 
 UITKOMSTEN: dict[str, str] = {

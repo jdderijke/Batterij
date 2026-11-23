@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from batsim import config
+from batsim import config, snelstart
 from uitleg import UITKOMSTEN, VELDEN, bij_uitkomst, bij_veld
 
 APP = (Path(__file__).resolve().parent.parent / "app.py").read_text(encoding="utf-8")
@@ -40,6 +40,9 @@ VARIABELEN = {
     "nc": "Netcongestie",
     "t": "Tarieven",
     "i": "Investering",
+    # De antwoorden van het snelstartvenster ("vr" van vragen). Geen onderdeel
+    # van de Config, maar de velden worden met dezelfde hulpfuncties getoond.
+    "vr": "Snelstart",
 }
 
 
@@ -83,13 +86,15 @@ def test_uitleg_verwijst_naar_bestaande_velden():
     """Een tikfout in een sleutel zou een tekst opleveren die nergens bij hoort.
 
     ``Scenario`` is geen onderdeel van de Config: dat zijn de invoervelden van
-    het tabblad Scenario's.
+    het tabblad Scenario's. ``Snelstart`` is dat ook niet, maar is wel een
+    dataclass (in ``batsim/snelstart.py``) en wordt dus net zo nagelopen.
     """
     for sleutel in VELDEN:
         klasse, veld = sleutel.split(".")
         if klasse == "Scenario":
             continue
-        namen = {f.name for f in dataclasses.fields(getattr(config, klasse))}
+        module = snelstart if klasse == "Snelstart" else config
+        namen = {f.name for f in dataclasses.fields(getattr(module, klasse))}
         assert veld in namen, sleutel
 
 

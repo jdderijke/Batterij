@@ -128,10 +128,13 @@ Goed om te weten:
 
 ### In het kort
 
-1. Kies in de zijbalk het **jaar** en het **KNMI-station** het dichtst bij huis.
-2. Vul op het tabblad **Instellingen** je eigen situatie in.
-3. Klik op **Simulatie starten**.
-4. Lees de uitkomst op de tabbladen **Overzicht** tot en met **Warmtepomp**.
+1. Klik in de zijbalk op **Quick Start…**, kies het **jaar** en het
+   **KNMI-station** het dichtst bij huis en beantwoord de vragen over je huis.
+2. Klik op **Toepassen**: de app rekent het jaar door en opent het tabblad
+   **Overzicht**.
+3. Lees de uitkomst op de tabbladen **Overzicht** tot en met **Warmtepomp**.
+4. Stel op het tabblad **Instellingen** bij wat je preciezer weet en klik
+   daarna boven de tabbladen op **Herbereken alles**.
 5. Vergelijk varianten op het tabblad **Scenario's**.
 
 Achter elk veld en elk getal staat een **vraagteken (?)** met uitleg in gewone
@@ -140,14 +143,11 @@ heeft. Weet je een waarde niet, laat dan de standaardwaarde staan.
 
 ### De zijbalk
 
-| Veld of knop | Betekenis |
+| Knop | Betekenis |
 | --- | --- |
-| Jaar | Het jaar waarvan weer en prijzen worden gebruikt. |
-| KNMI-station | Het weerstation; kies het dichtstbijzijnde. |
-| Tijdstap | Hoe fijn er gerekend wordt. Kleiner is nauwkeuriger (vooral voor pieken per fase) maar langzamer. 5 minuten is een goed begin. |
-| Toevalsreeks | Bepaalt op welke momenten apparaten en auto toevallig aan- en afschakelen. Hetzelfde getal geeft steeds dezelfde uitkomst. |
-| Simulatie starten | Rekent het jaar opnieuw door. Doe dit na elke wijziging. |
-| Instellingen laden… | Opent een eerder opgeslagen bestand met instellingen. Alle velden krijgen de waarden uit dat bestand. |
+| Handleiding | Toont deze handleiding in een venster over de app heen. |
+| Quick Start… | Opent een venster met een paar gewone vragen (soort huis, bouwjaar, glas, warmtepomp, panelen, auto) en leidt daar de meeste instellingen uit af. Zie hieronder. |
+| Instellingen laden… | Opent een eerder opgeslagen bestand met instellingen. Alle velden krijgen de waarden uit dat bestand, en de app rekent het jaar meteen door. |
 | Instellingen opslaan | Schrijft de instellingen terug in het bestand waaruit je ze geladen hebt. Is er nog geen bestand, dan vraagt de app waar het moet komen. |
 | Opslaan als… | Slaat de instellingen op in een ander bestand, bijvoorbeeld om een variant te bewaren. Daarna schrijft **Instellingen opslaan** in dat bestand. |
 | Standaardinstellingen | Zet alles terug op de standaardwaarden en laat het bestand los. Sla je eigen invoer eerst op als je die wilt houden; het bestand zelf blijft ongemoeid. |
@@ -162,6 +162,47 @@ opslaan is alleen nodig om varianten naast elkaar te houden of door te geven.
 De invoer op het tabblad Scenario's hoort niet bij de instellingen en wordt
 niet opgeslagen.
 
+### Herbereken alles
+
+Boven de tabbladen staat een balk die blijft staan als je naar beneden
+schuift, met de knop **Herbereken alles**. Die rekent het hele jaar opnieuw
+door met de instellingen van dat moment. De knop is alleen klikbaar als er
+sinds de laatste berekening iets aan de instellingen is veranderd; naast de
+knop staat of de uitkomsten nog bij de instellingen horen. Na **Toepassen** in
+Quick Start en na het laden van een bestand rekent de app vanzelf.
+
+### Quick Start
+
+Het tabblad Instellingen heeft ruim honderd velden, veel ervan met vaktermen.
+De knop **Quick Start…** in de zijbalk opent een venster met vragen die je
+zonder voorkennis kunt beantwoorden; de app rekent ze om naar instellingen.
+
+| Vraag | Wat eruit wordt afgeleid |
+| --- | --- |
+| Jaar en KNMI-station | Dezelfde twee velden als in het blok Algemeen |
+| Soort huis | Buitenoppervlak ÷ vloeroppervlak |
+| Bouwjaar en na-isolatie | Rc-waarde en luchtverversing |
+| Bouwmateriaal en vloeren | Warmteopslag in het gebouw |
+| Soort glas | U-waarde van de ramen |
+| Verwarmd oppervlak | Vloeroppervlak en raamoppervlak |
+| WTW en aantal personen | WTW-unit, interne warmte en tapwater |
+| Warmtepomp en soort verwarming | Aanwezig, vermogen (uit het warmteverlies van het huis), aanvoertemperatuur en COP |
+| Zonnepanelen (ja/nee), aantal, dakkant, al in bezit | Aanwezig en de zonnevelden |
+| Schakelen de panelen bij zonnig weer af? | Netcongestie meenemen |
+| Batterij (ja/nee), grootte en strategie | Aanwezig, capaciteit en strategie |
+| Elektrische auto en km per jaar | Aanwezig en km per dag |
+| Stroomcontract | Dynamisch of vast |
+
+Het venster opent met de antwoorden die het best passen bij wat er nu is
+ingesteld. Onder de vragen staat **elke instelling die overschreven wordt**,
+met de waarde van nu en de nieuwe waarde; haal het vinkje weg bij wat je wilt
+houden. Warmtepomp, zonnepanelen, batterij en auto hebben elk een eigen
+schakelaar, zodat je ook zonder een van die onderdelen kunt rekenen; wat je
+uitzet, houdt zijn instellingen. Na **Toepassen** rekent de app meteen het
+jaar door en opent ze het tabblad **Overzicht**. Er verandert pas iets na
+**Toepassen**, en alleen wat in die lijst staat: de tijdstap, de aansluiting, de apparaten, de prijzen en de details van batterij en
+omvormers blijven zoals ze zijn.
+
 ### Instellingen
 
 ![Het tabblad Instellingen](docs/screenshots/instellingen.png)
@@ -173,6 +214,12 @@ de kop van het blok, ook als het dicht is. In elke kop staan in grijs de
 belangrijkste kentallen van dat blok, zodat je de hele installatie overziet
 zonder de blokken te openen.
 
+- **Algemeen** – het jaar waarvan weer en prijzen worden gebruikt, het
+  KNMI-station (kies het dichtstbijzijnde), de tijdstap (kleiner is
+  nauwkeuriger, vooral voor pieken per fase, maar langzamer; 5 minuten is een
+  goed begin) en de toevalsreeks (bepaalt op welke momenten apparaten en auto
+  toevallig aan- en afschakelen; hetzelfde getal geeft steeds dezelfde
+  uitkomst).
 - **Aansluiting en load balancing** – de hoofdzekering, en welke apparaten
   terugregelen als een fase te zwaar belast wordt.
 - **Huis** – oppervlak, isolatie en gewenste temperatuur van het huis.
@@ -194,8 +241,8 @@ zonder de blokken te openen.
 - **Investering** – de aanschafprijzen en de levensduur waarmee gerekend
   wordt. Wat je al in bezit hebt, telt niet mee als investering.
 
-Na een wijziging tonen de andere tabbladen een waarschuwing tot je opnieuw op
-**Simulatie starten** hebt geklikt.
+Na een wijziging tonen de andere tabbladen een waarschuwing tot je boven de
+tabbladen op **Herbereken alles** hebt geklikt.
 
 ### Overzicht
 
@@ -253,22 +300,37 @@ stroomverbruik.
 
 ### Scenario's
 
-![Het tabblad Scenario's: batterijgroottes naast elkaar](docs/screenshots/scenarios.png)
+![Het tabblad Scenario's: alternatieven afgezet tegen de baseline](docs/screenshots/scenarios.png)
 
-Rekent in één keer meerdere varianten door en zet ze naast elkaar. Alle
-overige instellingen blijven zoals ze zijn; alles wordt vergeleken met de
-huidige panelen zonder batterij.
+Rekent in één keer meerdere varianten door en zet ze naast elkaar. Het
+uitgangspunt is de **baseline**: de instellingen van de laatste berekening.
+Bovenaan het tabblad staat wat daarin zit (panelen, batterij, topologie,
+omvormers en strategie). Elk scenario is de baseline met een of meer
+onderdelen vervangen door een alternatief, en wordt met de baseline
+vergeleken. Zijn de instellingen gewijzigd, klik dan eerst op **Herbereken
+alles**.
 
-1. Vul de **batterijgroottes** in, gescheiden door komma's (0 = geen batterij).
-2. Vul bij **aantal panelen** een of meer factoren in: 1 is de huidige
-   panelen, 1.5 is anderhalf keer zoveel. Decimalen met een punt.
-3. Kies een of meer **topologieën**, **omvormers** en **strategieën**.
-4. Klik op **scenario's doorrekenen**. Op de knop staat hoeveel combinaties
-   dat zijn; elke combinatie kost een volledige simulatie.
+1. Vul bij **aantal panelen** een of meer factoren in: 0.5 is de helft van de
+   panelen van de baseline, 1.5 is anderhalf keer zoveel. Decimalen met een
+   punt. Dit veld is er alleen als de zonnepanelen aan staan.
+2. Vul de **batterijgroottes** in, gescheiden door komma's (0 = geen
+   batterij).
+3. Kies zo nodig een **andere topologie**, **andere omvormers** of een
+   **andere strategie**. In de lijsten staat alleen wat niet al in de
+   baseline zit; er is niets vooraf gekozen.
+4. Klik op **scenario's doorrekenen**. Op de knop staat hoeveel scenario's
+   dat zijn; elk scenario kost een volledige simulatie.
 
-De grafiek toont het netto voordeel over de levensduur, met de beste variant
-bovenaan. De tabel eronder geeft per variant de kosten, de besparing en de
-investering; ga met de muis op een kolomkop staan voor uitleg.
+De velden van stap 2 en 3 zijn er alleen als de batterij aan staat. Alle
+velden beginnen leeg; een veld dat je leeg laat, blijft zoals in de baseline.
+Kies je bijvoorbeeld alleen een andere strategie, dan wordt er precies één
+scenario doorgerekend: de baseline met die strategie.
+
+De grafiek toont het netto voordeel over de levensduur ten opzichte van de
+baseline, met de beste variant bovenaan: groen is beter dan de baseline, rood
+is slechter. De tabel eronder geeft per variant
+de kosten, de besparing en de investering; ga met de muis op een kolomkop
+staan voor uitleg.
 
 ## Voor ontwikkelaars
 

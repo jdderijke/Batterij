@@ -36,6 +36,7 @@ import dataclasses
 import datetime as dt
 import html
 import math
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -69,10 +70,23 @@ from batsim.data import (
     onbalans_pad,
 )
 from batsim.huis import warmteverlies_w_per_k
-from batsim.paden import gebruikersmap
+from batsim.paden import gebruikersmap, programmamap
 from batsim.resultaat import in_bezit, investering, vergelijk
-from batsim.scenario import vergelijk_scenarios
+from batsim.scenario import combinaties, vergelijk_scenarios
 from batsim.simulatie import Uitkomst, handelt_op_onbalans, netspanning_straat, voer_uit, zonder_batterij
+from batsim.snelstart import (
+    AFGIFTE,
+    BOUWMATERIALEN,
+    GLASSOORTEN,
+    NA_ISOLATIE,
+    RICHTINGEN,
+    VLOEREN,
+    WONINGTYPEN,
+    Snelstart,
+    leid_af,
+    pas_toe,
+    wijzigingen,
+)
 from bestandskeuze import kies_csv_om_te_openen, kies_om_op_te_slaan, kies_om_te_openen
 from uitleg import bij_uitkomst, bij_veld
 
@@ -84,6 +98,10 @@ INSTELLINGEN_PAD = gebruikersmap() / "instellingen.json"
 # bestandje en geen veld in ``instellingen.json``: dat bestand is een Config en
 # moet ook als zodanig te laden blijven.
 HUIDIG_BESTAND_PAD = gebruikersmap() / "huidig_bestand.txt"
+# De handleiding die de knop "Handleiding" toont. Hoort bij het programma en
+# niet bij de gebruiker: ze wordt meegeleverd en bij een nieuwe versie mee
+# vervangen (zie ``batterij.spec``).
+HANDLEIDING_PAD = programmamap() / "README.md"
 
 # Naam van de uitgerekende kolom in de apparatentabel. Geen veld van
 # ``Apparaat``: de kolom wordt alleen getoond en nooit bewaard.
@@ -104,6 +122,12 @@ KLEUR = {
     "l3": "#1baf7a",
     "grens": "#d03b3b",
     "referentie": "#898781",
+    # Geen onderdeel maar een oordeel: beter of slechter dan de baseline, in
+    # de grafiek van de scenario's. Groen en rood verschillen ook in
+    # helderheid, en de balken wijzen bovendien een andere kant op (rechts of
+    # links van nul), zodat de kleur niet het enige kenmerk is.
+    "beter": "#1a8f5c",
+    "slechter": "#d03b3b",
 }
 NAAM = {
     "huishouden": "Huishouden",
@@ -483,7 +507,11 @@ def _kentallen(cfg: Config) -> dict[str, str]:
 
     kosten = f"€ {nl(investering(cfg)['totaal'])}, {nl(cfg.investering.levensduur_jaren)} jaar"
 
+    alg = cfg.algemeen
+    algemeen = f"{alg.jaar}, {STATIONSNAMEN.get(alg.knmi_station, alg.knmi_station)}, {alg.tijdstap_min} min"
+
     return {
+        "algemeen": algemeen,
         "aansluiting": aansluiting,
         "huis": huis,
         "warmtepomp": warmtepomp,
@@ -602,11 +630,22 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
         "Weet je een waarde niet, laat dan de standaardwaarde staan."
     )
     # Bij de eerste keer staat het eerste blok open.
-    st.session_state.setdefault("open_tegel", "aansluiting")
+    st.session_state.setdefault("open_tegel", "algemeen")
     # De kentallen voor in de koppen, één keer voor alle tegels. Ze horen bij
     # de instelling aan het begin van deze opbouw; na een wijziging volgt
     # altijd een nieuwe opbouw (zie hierboven), waarin ze bijgewerkt zijn.
     kern = _kentallen(cfg)
+
+    # Jaar, station, tijdstap en toevalsreeks stonden eerst in de zijbalk. Het
+    # zijn instellingen als alle andere (ze worden mee bewaard en bepalen de
+    # uitkomst), dus ze staan nu hier, als eerste blok.
+    for _ in tegel("algemeen", "Algemeen", kentallen=kern["algemeen"]):
+        alg = cfg.algemeen
+        k1, k2, k3, k4 = st.columns(4)
+        keuze(k1, alg, "jaar", "Jaar (weer en prijzen)", {j: str(j) for j in _jaren()})
+        keuze(k2, alg, "knmi_station", "KNMI-station", STATIONSNAMEN)
+        keuze(k3, alg, "tijdstap_min", "Tijdstap", {m: f"{m} min" for m in TIJDSTAPPEN_MIN})
+        getal(k4, alg, "seed", "Toevalsreeks", 1, 0)
 
     for _ in tegel("aansluiting", "Aansluiting en load balancing", kentallen=kern["aansluiting"]):
         a = cfg.aansluiting
@@ -778,7 +817,7 @@ def toon_instellingen(cfg: Config, weer: pd.DataFrame | None = None) -> None:
                 st.caption(f"Onbalansprijzen {jaar}: aanwezig (verrekenprijzen van TenneT, per kwartier).")
             else:
                 st.warning(
-                    f"Voor {jaar} zijn geen onbalansprijzen meegeleverd. Kies in de zijbalk een ander jaar, of download ze bij "
+                    f"Voor {jaar} zijn geen onbalansprijzen meegeleverd. Kies in het blok Algemeen een ander jaar, of download ze bij "
                     f"[TenneT]({ONBALANS_DOWNLOADPAGINA}): kies 'Settlement prices', het jaar {jaar} en het formaat CSV, "
                     "en lees het bestand hieronder in. Dat hoeft per jaar maar één keer."
                 )
@@ -1443,70 +1482,167 @@ def _getallen(tekst: str) -> list[float]:
     return getallen
 
 
-def toon_scenarios(cfg: Config, weer: pd.DataFrame, prijzen: pd.DataFrame) -> None:
-    """Laat combinaties van batterij, panelen en architectuur naast elkaar doorrekenen."""
+# De uitleg bij besparing, meerinvestering, terugverdientijd en netto voordeel
+# is geschreven voor het Overzicht, waar met "zonder batterij" wordt
+# vergeleken. Bij de scenario's is de baseline het nulpunt; deze zin staat
+# daarom vóór dezelfde uitleg. Afgewezen: aparte teksten voor de scenario's;
+# dat zijn vier teksten die bij elke wijziging van de som mee moeten.
+_T_O_V_BASELINE = (
+    "**Op dit tabblad is dit het verschil met de baseline**, niet met 'zonder batterij' zoals in het Overzicht; "
+    "lees 'de batterij' hieronder als 'het scenario'.\n\n"
+)
+
+
+def _baseline_tekst(uit: Uitkomst) -> str:
+    """Vat de baseline van de scenario's samen in één regel: panelen, batterij en architectuur.
+
+    Waarom dit bestaat:
+        Elk scenario is "de baseline met iets anders". Zonder deze regel moet
+        de gebruiker naar het tabblad Instellingen om te zien waar een
+        scenario mee vergeleken wordt, en welke keuzes al in de baseline zitten
+        en daarom niet in de keuzelijsten staan.
+    """
+    basis = uit.cfg
+    b = basis.batterij
+    if basis.zon.aanwezig:
+        panelen = sum(v.aantal_panelen for v in basis.zon.velden)
+        delen = [f"**Panelen:** {panelen} stuks ({nl(uit.kentallen['kwp'], 1)} kWp)"]
+    else:
+        delen = ["**Panelen:** geen"]
+    if b.aanwezig and b.capaciteit_kwh > 0:
+        delen += [
+            f"**Batterij:** {nl(b.capaciteit_kwh, 1)} kWh",
+            f"**Topologie:** {TOPOLOGIEEN[b.topologie]}",
+            f"**Omvormers:** {KOPPELINGEN[b.koppeling].split(':')[0]}",
+            f"**Strategie:** {STRATEGIEEN[b.strategie]}",
+        ]
+    else:
+        delen.append("**Batterij:** geen")
+    return " · ".join(delen)
+
+
+def toon_scenarios(uit: Uitkomst, weer: pd.DataFrame, prijzen: pd.DataFrame, verouderd: bool) -> None:
+    """Laat alternatieven voor panelen, batterij en architectuur doorrekenen tegen de baseline.
+
+    Waarom dit bestaat:
+        De baseline is de instelling van de laatste berekening (``uit.cfg``),
+        niet wat er op dit moment in de invoervelden staat. Zo is het nulpunt
+        van de vergelijking altijd iets waarvan de uitkomsten op de andere
+        tabbladen te zien zijn. Zijn de instellingen daarna gewijzigd, dan
+        moet er eerst opnieuw gerekend worden; tot die tijd is de knop uit.
+
+    Args:
+        uit: de uitkomst van de laatste berekening; haar instelling is de
+            baseline en zijzelf de referentie.
+        weer, prijzen: de data van het jaar van die berekening.
+        verouderd: of de instellingen sinds die berekening gewijzigd zijn.
+    """
+    basis = uit.cfg
+    b = basis.batterij
+    met_panelen = basis.zon.aanwezig
+    met_batterij = b.aanwezig and b.capaciteit_kwh > 0
+
     st.markdown(
-        "Elke combinatie van de keuzes hieronder wordt doorgerekend met de overige instellingen ongewijzigd. "
-        "Alles wordt vergeleken met de huidige panelen **zonder batterij**."
+        "Elk scenario is de **baseline** met een of meer onderdelen vervangen door een alternatief dat je hieronder kiest; "
+        "al het andere blijft gelijk. Elk scenario wordt vergeleken met de baseline."
     )
-    k1, k2 = st.columns(2)
-    cap_tekst = k1.text_input(
-        "Batterijgroottes (kWh, 0 = geen batterij)", "0, 5, 10, 15, 20, 30", key="sc_cap", help=bij_veld("Scenario.capaciteiten")
-    )
-    factor_tekst = k2.text_input(
-        "Aantal panelen (factor op de huidige velden)", "1", key="sc_factor", help=bij_veld("Scenario.factoren")
-    )
-    k1, k2, k3 = st.columns(3)
-    topologieen = k1.multiselect(
-        "Topologie",
-        list(TOPOLOGIEEN),
-        [cfg.batterij.topologie],
-        format_func=TOPOLOGIEEN.get,
-        key="sc_topo",
-        help=bij_veld("Scenario.topologieen"),
-    )
-    koppelingen = k2.multiselect(
-        "Omvormers",
-        list(KOPPELINGEN),
-        [cfg.batterij.koppeling],
-        format_func=lambda s: KOPPELINGEN[s].split(":")[0],
-        key="sc_kop",
-        help=bij_veld("Scenario.koppelingen"),
-    )
-    strategieen = k3.multiselect(
-        "Strategie",
-        list(STRATEGIEEN),
-        [cfg.batterij.strategie],
-        format_func=STRATEGIEEN.get,
-        key="sc_strat",
-        help=bij_veld("Scenario.strategieen"),
-    )
+    st.info("Baseline (de instellingen van de laatste berekening): " + _baseline_tekst(uit))
+    if verouderd:
+        st.warning("De instellingen zijn gewijzigd sinds deze simulatie. Klik bovenaan op 'Herbereken alles'; daarna kun je scenario's doorrekenen.")
+    if not (met_panelen or met_batterij):
+        st.info("Er valt niets te variëren: zonnepanelen en batterij staan allebei uit. Zet er bij Instellingen minstens één aan.")
+        return
+
+    # Eerst de panelen, dan de batterij. Een onderdeel dat bij Instellingen uit
+    # staat, krijgt hier geen velden: wie zonder batterij rekent, vergelijkt
+    # geen batterijen. Afgewezen: de velden wel tonen maar uitgegrijsd; dat
+    # geeft een scherm vol invoer waar niets mee kan.
+    factor_tekst = cap_tekst = ""
+    topologieen: list[str] = []
+    koppelingen: list[str] = []
+    strategieen: list[str] = []
+    # De twee lijsten beginnen leeg, net als de keuzelijsten eronder: alles wat
+    # hier staat is een alternatief dat de gebruiker zelf heeft gekozen. Het
+    # voorbeeld staat in de naam van het veld. Afgewezen: een vooraf ingevulde
+    # reeks; die rekent ongevraagd 23 scenario's door en moet eerst worden
+    # leeggemaakt door wie alleen een andere strategie wil zien.
+    if met_panelen:
+        factor_tekst = st.text_input(
+            "Aantal panelen (factoren op de baseline, gescheiden door komma: 0.5, 1.0, 1.5, etc.)",
+            key="sc_panelen",
+            help=bij_veld("Scenario.factoren"),
+        )
+    if met_batterij:
+        cap_tekst = st.text_input(
+            "Batterijgroottes (kWh, gescheiden door komma, 0 = geen batterij)", key="sc_batterij", help=bij_veld("Scenario.capaciteiten")
+        )
+        # In de keuzelijsten staat alleen wat níet al in de baseline zit, en
+        # er is niets vooraf gekozen: wat je aanvinkt is een alternatief. De
+        # waarde van de baseline zit in de sleutel van het veld, zodat een
+        # eerdere keuze niet blijft hangen als de baseline verandert (ze zou
+        # dan zelf de baseline kunnen zijn en niet meer in de lijst staan).
+        # Topologie en omvormers hebben elk één alternatief en delen een rij;
+        # de strategie heeft er drie, met lange namen, en krijgt de volle
+        # breedte, zodat alle gekozen strategieën leesbaar naast elkaar staan.
+        # Afgewezen: drie kolommen naast elkaar; daarin werden de gekozen
+        # strategieën afgekapt.
+        k1, k2 = st.columns(2)
+        k3 = st.container()
+        topologieen = k1.multiselect(
+            "Andere topologie",
+            [t for t in TOPOLOGIEEN if t != b.topologie],
+            format_func=TOPOLOGIEEN.get,
+            key=f"sc_topo_{b.topologie}",
+            help=bij_veld("Scenario.topologieen"),
+        )
+        koppelingen = k2.multiselect(
+            "Andere omvormers",
+            [k for k in KOPPELINGEN if k != b.koppeling],
+            format_func=lambda s: KOPPELINGEN[s].split(":")[0],
+            key=f"sc_kop_{b.koppeling}",
+            help=bij_veld("Scenario.koppelingen"),
+        )
+        strategieen = k3.multiselect(
+            "Andere strategie",
+            [s for s in STRATEGIEEN if s != b.strategie],
+            format_func=STRATEGIEEN.get,
+            key=f"sc_strat_{b.strategie}",
+            help=bij_veld("Scenario.strategieen"),
+        )
 
     try:
-        capaciteiten, factoren = _getallen(cap_tekst), _getallen(factor_tekst)
+        # Negatieve getallen bestaan hier niet; ze tellen als nul.
+        capaciteiten = [max(c, 0.0) for c in _getallen(cap_tekst)]
+        factoren = [max(f, 0.0) for f in _getallen(factor_tekst)]
     except ValueError:
         st.error("De lijsten mogen alleen getallen bevatten, gescheiden door komma's (decimalen met een punt).")
         return
-    if not (capaciteiten and factoren and topologieen and koppelingen and strategieen):
-        st.info("Kies bij elk onderdeel minstens één waarde.")
-        return
 
-    met = [c for c in capaciteiten if c > 0]
-    aantal = len(factoren) * (len(met) * len(topologieen) * len(koppelingen) * len(strategieen) + (1 if len(met) < len(capaciteiten) else 0))
-    if st.button(f"{aantal} scenario's doorrekenen", type="primary", key="sc_start"):
-        # Onbalansprijzen zijn alleen nodig als die strategie is gekozen voor
-        # een scenario met batterij. Ontbreken ze, dan zegt de melding wat de
+    # Dezelfde lijst als die de berekening afloopt, zodat het getal op de knop
+    # klopt. De waarde van de baseline in een lijst (factor 1, de huidige
+    # batterijgrootte) levert geen extra scenario op.
+    lijst = combinaties(basis, capaciteiten, factoren, topologieen, koppelingen, strategieen)
+    if not lijst:
+        st.info("Kies minstens één alternatief dat afwijkt van de baseline.")
+    elif st.button(
+        "1 scenario doorrekenen" if len(lijst) == 1 else f"{len(lijst)} scenario's doorrekenen",
+        type="primary",
+        key="sc_start",
+        disabled=verouderd,
+    ):
+        # Onbalansprijzen zijn alleen nodig als een scenario met batterij op
+        # de onbalansmarkt handelt. Ontbreken ze, dan zegt de melding wat de
         # gebruiker moet doen en wordt er niets doorgerekend.
         onbalans = None
-        if "onbalans" in strategieen and met:
+        if any(cap > 0 and strat == "onbalans" for cap, _, _, _, strat in lijst):
             try:
-                onbalans = haal_onbalans(cfg.algemeen.jaar)
+                onbalans = haal_onbalans(basis.algemeen.jaar)
             except OnbalansOntbreekt as fout:
                 st.error(str(fout))
                 return
         balk = st.progress(0.0, text="Scenario's doorrekenen…")
         st.session_state["scenario_tabel"] = vergelijk_scenarios(
-            cfg.kopie(),
+            basis.kopie(),
             weer,
             prijzen,
             capaciteiten,
@@ -1516,12 +1652,17 @@ def toon_scenarios(cfg: Config, weer: pd.DataFrame, prijzen: pd.DataFrame) -> No
             strategieen,
             voortgang=lambda klaar, totaal: balk.progress(klaar / totaal, text=f"Scenario {klaar} van {totaal}"),
             onbalans=onbalans,
+            # De baseline is al doorgerekend; opnieuw rekenen is niet nodig.
+            referentie=uit,
         )
-        st.session_state["scenario_jaren"] = cfg.investering.levensduur_jaren
+        st.session_state["scenario_jaren"] = basis.investering.levensduur_jaren
+        # Bij welke baseline deze tabel hoort. Na een nieuwe berekening met
+        # andere instellingen klopt ze niet meer en verdwijnt ze (hieronder).
+        st.session_state["scenario_basis"] = st.session_state["uitkomst_json"]
         balk.empty()
 
     tabel = st.session_state.get("scenario_tabel")
-    if tabel is None:
+    if tabel is None or tabel.empty or st.session_state.get("scenario_basis") != st.session_state["uitkomst_json"]:
         return
 
     jaren = st.session_state["scenario_jaren"]
@@ -1529,13 +1670,19 @@ def toon_scenarios(cfg: Config, weer: pd.DataFrame, prijzen: pd.DataFrame) -> No
     # het Overzicht en de kolom in de tabel hieronder: de som, en wat er niet
     # in zit (restwaarde, rente, veroudering).
     st.markdown(
-        f"**Netto voordeel over {nl(jaren)} jaar** (besparing per jaar × {nl(jaren)} − meerinvestering; beste bovenaan)",
-        help=bij_uitkomst("netto_voordeel"),
+        f"**Netto voordeel over {nl(jaren)} jaar ten opzichte van de baseline** "
+        f"(besparing per jaar × {nl(jaren)} − meerinvestering; beste bovenaan)",
+        help=_T_O_V_BASELINE + bij_uitkomst("netto_voordeel"),
     )
     top = tabel.head(20).iloc[::-1]
+    # Eerst de panelen, dan de batterij, net als de invoervelden.
     etiket = [
-        f"{nl(r['Batterij (kWh)'])} kWh · {nl(r['Panelen (kWp)'], 1)} kWp"
-        + (f" · {r['Topologie'].split(',')[0].split(' met')[0]} · {r['Koppeling']} · {r['Strategie']}" if r["Batterij (kWh)"] > 0 else " · geen batterij")
+        f"{nl(r['Panelen (kWp)'], 1)} kWp · "
+        + (
+            f"{nl(r['Batterij (kWh)'])} kWh · {r['Topologie'].split(',')[0].split(' met')[0]} · {r['Koppeling']} · {r['Strategie']}"
+            if r["Batterij (kWh)"] > 0
+            else "geen batterij"
+        )
         for _, r in top.iterrows()
     ]
     fig = go.Figure(
@@ -1543,7 +1690,8 @@ def toon_scenarios(cfg: Config, weer: pd.DataFrame, prijzen: pd.DataFrame) -> No
             x=top["Netto voordeel (€)"],
             y=etiket,
             orientation="h",
-            marker_color=KLEUR["batterij"],
+            # Groen is beter dan de baseline, rood is slechter.
+            marker_color=[KLEUR["beter"] if waarde >= 0 else KLEUR["slechter"] for waarde in top["Netto voordeel (€)"]],
             hovertemplate="%{y}<br>€ %{x:,.0f}<extra></extra>",
         )
     )
@@ -1553,17 +1701,21 @@ def toon_scenarios(cfg: Config, weer: pd.DataFrame, prijzen: pd.DataFrame) -> No
 
     # De kolommen van de tabel zijn dezelfde getallen als op het Overzicht;
     # ze krijgen dus ook dezelfde uitleg, bij de kolomkop.
-    st.caption("Ga met de muis op een kolomkop staan voor uitleg. Alle bedragen en kWh's gelden per jaar, behalve waar 'eenmalig' of de rekenperiode bij staat.")
+    st.caption(
+        "Ga met de muis op een kolomkop staan voor uitleg. Alle bedragen en kWh's gelden per jaar, behalve waar 'eenmalig' of de rekenperiode bij staat. "
+        "Besparing, meerinvestering, terugverdientijd en netto voordeel zijn het verschil met de baseline; een negatieve meerinvestering "
+        "betekent dat het scenario goedkoper is in aanschaf dan de baseline."
+    )
     st.dataframe(
         tabel,
         width="stretch",
         hide_index=True,
         column_config={
             "Kosten (€/jaar)": st.column_config.NumberColumn(format="%.0f", help=bij_uitkomst("kosten")),
-            "Besparing (€/jaar)": st.column_config.NumberColumn(format="%.0f", help=bij_uitkomst("besparing")),
-            "Meerinvestering (€)": st.column_config.NumberColumn(format="%.0f", help=bij_uitkomst("meerinvestering")),
-            "Terugverdientijd (jaar)": st.column_config.NumberColumn(format="%.1f", help=bij_uitkomst("terugverdientijd")),
-            "Netto voordeel (€)": st.column_config.NumberColumn(format="%.0f", help=bij_uitkomst("netto_voordeel")),
+            "Besparing (€/jaar)": st.column_config.NumberColumn(format="%.0f", help=_T_O_V_BASELINE + bij_uitkomst("besparing")),
+            "Meerinvestering (€)": st.column_config.NumberColumn(format="%.0f", help=_T_O_V_BASELINE + bij_uitkomst("meerinvestering")),
+            "Terugverdientijd (jaar)": st.column_config.NumberColumn(format="%.1f", help=_T_O_V_BASELINE + bij_uitkomst("terugverdientijd")),
+            "Netto voordeel (€)": st.column_config.NumberColumn(format="%.0f", help=_T_O_V_BASELINE + bij_uitkomst("netto_voordeel")),
             "Dagen off-grid": st.column_config.NumberColumn(format="%d", help=bij_uitkomst("offgrid_dagen")),
             "Zelfvoorzienend (%)": st.column_config.NumberColumn(format="%.0f", help=bij_uitkomst("zelfvoorzienend")),
             "Eigen verbruik zon (%)": st.column_config.NumberColumn(format="%.0f", help=bij_uitkomst("eigen_verbruik")),
@@ -1637,7 +1789,11 @@ def _laad_uit(pad: Path) -> bool:
     # waarden (zie de uitleg bovenaan dit bestand).
     st.session_state["generatie"] += 1
     _onthoud_bestand(pad, nieuw.naar_json())
-    st.session_state["melding"] = f"Instellingen geladen uit {pad.name}."
+    # Na het laden meteen rekenen: wie een bestand opent, wil de uitkomsten
+    # die erbij horen zien, niet die van de vorige instelling met een
+    # waarschuwing erboven.
+    st.session_state["simulatie_gevraagd"] = True
+    st.session_state["melding"] = f"Instellingen geladen uit {pad.name}; het jaar is doorgerekend."
     return True
 
 
@@ -1656,6 +1812,389 @@ def _bewaar_in(cfg: Config, pad: Path) -> bool:
     _onthoud_bestand(pad, cfg.naar_json())
     st.session_state["melding"] = f"Instellingen opgeslagen in {pad.name}."
     return True
+
+
+# Opmaak van de balk boven de tabbladen: de balk met "Herbereken alles" en de
+# rij met tabbladnamen blijven staan terwijl de inhoud eronderdoor schuift.
+#
+# Waarom eigen CSS: Streamlit kent geen "vast bovenaan". ``position: sticky``
+# doet precies dat binnen het schuivende hoofdpaneel. De balk is te vinden aan
+# de sleutel van haar container (``st.container(key="kopbalk")`` geeft de
+# klasse ``st-key-kopbalk``), de tabbladnamen aan hun rol in de pagina.
+#
+# De balk plakt via haar omhulsel (``stLayoutWrapper``) en niet zelf: een
+# element plakt alleen binnen zijn directe ouder, en het omhulsel is precies
+# zo hoog als de balk, dus de balk zelf zou nergens heen kunnen. Het omhulsel
+# hangt wel direct in de pagina.
+#
+# De maten horen bij elkaar: 3,75 rem is de hoogte van de kop van Streamlit
+# zelf, waar de balk onder plakt; de balk is 2,5 rem hoog plus twee keer
+# 0,5 rem ruimte, en de tabbladnamen plakken daar direct onder (7,25 rem).
+#
+# ``{achtergrond}`` wordt ingevuld door ``_kopbalk_css``: zonder dekkende
+# achtergrond schijnt de inhoud die eronderdoor schuift door de balk heen.
+KOPBALK_CSS = """
+<style>
+div[data-testid="stLayoutWrapper"]:has(> .st-key-kopbalk) {
+    position: sticky;
+    top: 3.75rem;
+    z-index: 100;
+    padding: 0.5rem 0;
+    background: {achtergrond};
+}
+.stTabs [role="tablist"] {
+    position: sticky;
+    top: 7.25rem;
+    z-index: 100;
+    background: {achtergrond};
+}
+</style>
+"""
+
+
+def _kopbalk_css() -> str:
+    """Geeft de opmaak van de balk boven de tabbladen, met de achtergrondkleur van het thema.
+
+    De browser kiest zelf een licht of donker thema (naar de instelling van
+    Windows). De kleuren hier zijn de achtergrondkleuren van die twee
+    standaardthema's van Streamlit; de app heeft geen eigen thema.
+    """
+    donker = getattr(st.context.theme, "type", "light") == "dark"
+    return KOPBALK_CSS.replace("{achtergrond}", "#0e1117" if donker else "#ffffff")
+
+# Keuzelijsten die op twee plekken staan: in het blok Algemeen en in het
+# venster van Quick Start.
+STATIONSNAMEN = {nummer: naam for nummer, (naam, _, _) in KNMI_STATIONS.items()}
+
+
+def _jaren() -> list[int]:
+    """Geeft de jaren waarvoor weer en prijzen bestaan: 2019 tot en met vorig jaar.
+
+    Het lopende jaar hoort er niet bij; de simulatie speelt een heel jaar na.
+    """
+    return list(range(2019, dt.date.today().year))
+
+
+def _vraag_simulatie() -> None:
+    """Legt vast dat de volgende opbouw van de pagina het jaar moet doorrekenen.
+
+    Wordt aangeroepen door de knop "Herbereken alles", vóór de opbouw die op
+    de klik volgt. ``main`` leest de wens aan het begin van die opbouw.
+    """
+    st.session_state["simulatie_gevraagd"] = True
+
+
+def _toon_herbereken(plek, te_herberekenen: bool) -> None:
+    """Toont de knop "Herbereken alles" en de stand van de uitkomsten in de balk boven de tabbladen.
+
+    Waarom dit bestaat:
+        De knop stond in de zijbalk en heette "Simulatie starten". Ze staat nu
+        boven de tabbladen, omdat ze bij de uitkomsten hoort: op elk tabblad
+        is te zien of de uitkomsten nog bij de instellingen passen, en zo niet,
+        dan staat de knop om dat te herstellen ernaast.
+
+    Alleen klikbaar als er iets te herberekenen valt:
+        Is er sinds de laatste simulatie niets aan de instellingen veranderd,
+        dan geeft opnieuw rekenen precies dezelfde uitkomst. De knop is dan
+        grijs, en de tekst ernaast zegt waarom.
+
+    Waarom de knop pas laat in de opbouw gevuld wordt, en met een callback:
+        Of er iets te herberekenen valt, is pas bekend nadat het tabblad
+        Instellingen is opgebouwd en er eventueel gerekend is. De plek van de
+        knop ligt daarvóór. ``main`` reserveert daarom eerst de plek en roept
+        deze functie aan het eind aan. Een klik kan dan niet meer via de
+        terugkeerwaarde van de knop worden gelezen (dat is te laat om in
+        dezelfde opbouw nog te rekenen); de callback zet de wens in de sessie
+        en de volgende opbouw begint ermee.
+
+    Args:
+        plek: de container boven de tabbladen.
+        te_herberekenen: of de instellingen afwijken van de laatste simulatie.
+    """
+    knop, tekst = plek.columns([1, 4], vertical_alignment="center")
+    knop.button(
+        "Herbereken alles",
+        type="primary",
+        width="stretch",
+        disabled=not te_herberekenen,
+        on_click=_vraag_simulatie,
+        key="herbereken",
+    )
+    if te_herberekenen:
+        tekst.caption("De instellingen zijn gewijzigd; de uitkomsten op de tabbladen zijn verouderd.")
+    else:
+        tekst.caption("De uitkomsten horen bij de huidige instellingen.")
+
+
+@st.cache_data(show_spinner=False)
+def _handleiding_delen(gewijzigd: float) -> list[tuple[str, str]]:
+    """Leest README.md en knipt de tekst op bij elke schermafbeelding.
+
+    Waarom het knippen nodig is:
+        In README.md staan de schermafbeeldingen als verwijzing naar een
+        bestand (``docs/screenshots/overzicht.png``). Op GitHub werkt dat; in
+        de app niet, want de browser kan niet bij bestanden op schijf. De
+        tekst wordt daarom opgeknipt in stukken tekst en plaatjes, en het
+        venster toont elk plaatje zelf met ``st.image``.
+
+        Afgewezen: de plaatjes in de tekst zelf opnemen (als ``data:``-adres).
+        Streamlit haalt zulke adressen om veiligheidsredenen uit Markdown; de
+        plaatjes verschenen dan niet.
+
+    Args:
+        gewijzigd: wijzigingstijd van README.md. Hoort bij de sleutel van de
+            voorraad, zodat een aangepaste handleiding ook echt opnieuw
+            gelezen wordt.
+
+    Returns:
+        De handleiding als rij van ``("tekst", markdown)`` en
+        ``("plaatje", pad)``, in de volgorde van het bestand.
+    """
+    tekst = HANDLEIDING_PAD.read_text(encoding="utf-8")
+    # Met een groep in het patroon geeft ``re.split`` om en om een stuk tekst
+    # en het pad van het plaatje dat erop volgt.
+    stukken = re.split(r"!\[[^\]]*\]\((docs/screenshots/[\w.-]+\.png)\)", tekst)
+    delen = []
+    for nummer, stuk in enumerate(stukken):
+        if nummer % 2 == 0:
+            if stuk.strip():
+                delen.append(("tekst", stuk))
+        elif (HANDLEIDING_PAD.parent / stuk).is_file():
+            # Een plaatje dat ontbreekt wordt overgeslagen; de tekst eromheen
+            # blijft leesbaar.
+            delen.append(("plaatje", str(HANDLEIDING_PAD.parent / stuk)))
+    return delen
+
+
+@st.dialog("Handleiding", width="large")
+def handleiding_venster() -> None:
+    """Toont README.md in een venster over de app heen.
+
+    Waarom README.md en geen eigen tekst:
+        De handleiding staat al in README.md en wordt daar bijgehouden. Een
+        tweede tekst in de app zou er vroeg of laat van gaan afwijken.
+
+    Afgewezen: een los browservenster (``window.open``). Dat houden browsers
+    tegen als pop-up, en het bestand zou eerst als webpagina klaargezet
+    moeten worden. Een venster binnen de app werkt altijd en sluit met Esc.
+    """
+    try:
+        delen = _handleiding_delen(HANDLEIDING_PAD.stat().st_mtime)
+    except OSError as fout:
+        st.error(f"De handleiding (README.md) is niet te lezen: {fout}")
+        return
+    for soort, inhoud in delen:
+        if soort == "tekst":
+            st.markdown(inhoud)
+        else:
+            st.image(inhoud)
+
+
+# De tabbladen, in de volgorde van het scherm. Als lijst met een naam, omdat
+# ``_toon_tabblad`` er een bij naam kiest.
+TABBLADEN = ["Instellingen", "Overzicht", "Tijdverloop", "Fasen en load balancing", "Warmtepomp", "Scenario's"]
+
+
+def _toon_tabblad(naam: str) -> None:
+    """Laat de volgende opbouw van de pagina openen op het tabblad ``naam``.
+
+    Waarom dit bestaat:
+        Welk tabblad openstaat, houdt de browser bij; de app weet het niet en
+        kan het dus ook niet zomaar zetten. Wat wel kan: de tabbladen een
+        nieuwe sleutel geven. De browser ziet dan een nieuwe rij tabbladen en
+        opent die op het tabblad dat als begin is opgegeven (``default``).
+        Deze functie zet dat begin en hoogt het volgnummer in de sleutel op;
+        ``main`` geeft beide door aan ``st.tabs``. Daarna blijven sleutel en
+        begin gelijk, zodat de gebruiker weer vrij kan bladeren.
+
+    Afgewezen: de tabbladen hun stand laten bijhouden
+    (``on_change="rerun"``), waarna het tabblad via de sessie te zetten is.
+    Dan bouwt elke wissel van tabblad de hele pagina opnieuw op, met alle
+    jaargrafieken; bladeren zou merkbaar trager worden voor iets dat alleen
+    na de snelstart nodig is.
+    """
+    st.session_state["tabblad_begin"] = naam
+    st.session_state["tabblad_ronde"] = st.session_state.get("tabblad_ronde", 0) + 1
+
+
+def _vergeet_snelstart() -> None:
+    """Wist de antwoorden die nog in de velden van het snelstartvenster staan.
+
+    Het venster moet elke keer openen met de antwoorden die bij de instelling
+    van dat moment horen (zie ``Snelstart.uit_config``). De velden hebben een
+    vaste sleutel, en Streamlit zet een veld met een bekende sleutel terug op
+    wat er de vorige keer stond; zonder deze stap zou een geannuleerde
+    snelstart bij het heropenen haar oude antwoorden tonen.
+    """
+    begin = f"w{st.session_state['generatie']}.{Snelstart.__name__}."
+    for sleutel in list(st.session_state):
+        if isinstance(sleutel, str) and (sleutel.startswith(begin) or sleutel.startswith("snelstart_keuze_")):
+            del st.session_state[sleutel]
+
+
+@st.dialog("Quick Start", width="large")
+def snelstart_venster(cfg: Config) -> None:
+    """Stelt de vragen van Quick Start en neemt de afgeleide instellingen over.
+
+    Op het scherm heet dit "Quick Start", op verzoek van de gebruiker; in de
+    code heet het overal "snelstart", omdat de code Nederlands is.
+
+    Waarom dit bestaat:
+        Wie voor het eerst begint, kent de vaktermen van het tabblad
+        Instellingen niet. Hier staan vragen die iedereen kan beantwoorden;
+        ``batsim/snelstart.py`` rekent ze om naar instellingen. Fijn afstellen
+        kan daarna op het tabblad Instellingen.
+
+    Waarom een venster (``st.dialog``) en geen zevende tabblad:
+        De snelstart is een handeling met een begin en een eind, geen plek
+        waar je blijft. Een venster dwingt de keuze af tussen toepassen en
+        annuleren, en bouwt bij elk antwoord alleen zichzelf opnieuw op, niet
+        de pagina met de jaargrafieken erachter.
+
+    De waarschuwing:
+        De snelstart overschrijft instellingen die misschien met zorg zijn
+        afgesteld. Onder de vragen staat daarom elke instelling die een andere
+        waarde krijgt, met de huidige en de nieuwe waarde, en een vinkje om
+        haar buiten de snelstart te houden. Er wordt niets overschreven dat
+        daar niet staat.
+
+        Afgewezen: één algemene waarschuwing ("bestaande instellingen gaan
+        verloren") met ja of nee. Die zegt niet wat er verloren gaat, en laat
+        alleen de keuze tussen alles en niets.
+
+    De velden gebruiken dezelfde hulpfuncties als het tabblad Instellingen
+    (``getal``, ``keuze``, ``schakelaar``), met de antwoorden als onderdeel in
+    plaats van een deel van de Config. Ze krijgen daardoor ook een vraagteken
+    met uitleg, uit ``uitleg.py`` onder ``Snelstart.<veld>``.
+
+    Args:
+        cfg: de instelling van het moment waarop het venster geopend werd.
+    """
+    # Bij elke opbouw opnieuw uit de instelling; de velden hieronder zetten
+    # er de antwoorden van de gebruiker overheen.
+    vr = Snelstart.uit_config(cfg)
+    st.caption(
+        "Beantwoord de vragen zo goed als je kunt; een schatting is genoeg. De app leidt er de instellingen uit af. "
+        "De vragen beginnen met wat er nu is ingesteld. Alles is daarna nog fijn af te stellen op het tabblad Instellingen."
+    )
+
+    # Dezelfde twee velden als in het blok Algemeen. Ze staan ook hier, omdat
+    # ze bepalen welk weer en welke prijzen er gebruikt worden; tijdstap en
+    # toevalsreeks zijn fijn afstellen en staan alleen in dat blok.
+    st.markdown("**Algemeen**")
+    k1, k2, _ = st.columns(3)
+    keuze(k1, vr, "jaar", "Welk jaar wil je narekenen?", {j: str(j) for j in _jaren()})
+    keuze(k2, vr, "knmi_station", "Welk KNMI-station ligt het dichtst bij?", STATIONSNAMEN)
+
+    st.markdown("**Je huis**")
+    k1, k2, k3 = st.columns(3)
+    keuze(k1, vr, "woningtype", "Wat voor soort huis heb je?", WONINGTYPEN)
+    getal(k2, vr, "bouwjaar", "Wat is het bouwjaar?", 1, 1600, dt.date.today().year)
+    keuze(k3, vr, "na_isolatie", "Is het later na-geïsoleerd?", NA_ISOLATIE)
+    k1, k2, k3 = st.columns(3)
+    keuze(k1, vr, "bouwmateriaal", "Waarvan is het gebouwd?", BOUWMATERIALEN)
+    keuze(k2, vr, "vloeren", "Houten of betonnen vloeren?", VLOEREN)
+    keuze(k3, vr, "glas", "Wat voor glas heb je?", GLASSOORTEN)
+    k1, k2, k3 = st.columns(3, vertical_alignment="bottom")
+    getal(k1, vr, "oppervlak_m2", "Hoeveel m² verwarm je?", 5.0, 20.0)
+    getal(k2, vr, "personen", "Met hoeveel personen woon je er?", 1, 1, 10)
+    schakelaar(k3, vr, "wtw", "Ventilatie met warmteterugwinning (WTW)")
+
+    st.markdown("**Verwarming**")
+    k1, k2, _ = st.columns(3, vertical_alignment="bottom")
+    schakelaar(k1, vr, "warmtepomp", "Ik heb (of wil) een warmtepomp")
+    if vr.warmtepomp:
+        keuze(k2, vr, "afgifte", "Hoe wordt het huis verwarmd?", AFGIFTE)
+
+    # Panelen en batterij hebben elk een eigen ja/nee, net als de warmtepomp
+    # en de auto: de simulatie moet ook zonder een van beide te draaien zijn.
+    # De vervolgvragen staan er alleen bij "ja"; bij "nee" blijven de
+    # bestaande instellingen van dat onderdeel bewaard.
+    st.markdown("**Zonnepanelen**")
+    k1, k2, k3 = st.columns(3, vertical_alignment="bottom")
+    schakelaar(k1, vr, "zonnepanelen", "Ik heb (of wil) zonnepanelen")
+    if vr.zonnepanelen:
+        getal(k2, vr, "panelen", "Hoeveel zonnepanelen?", 1, 1)
+        keuze(k3, vr, "richting", "Op welke kant van het dak?", RICHTINGEN)
+        _, k2, k3 = st.columns(3)
+        schakelaar(k2, vr, "panelen_in_bezit", "De panelen liggen er al")
+        schakelaar(k3, vr, "netcongestie", "Mijn panelen schakelen bij zonnig weer regelmatig af (netcongestie)")
+
+    st.markdown("**Batterij**")
+    k1, k2, k3 = st.columns(3, vertical_alignment="bottom")
+    schakelaar(k1, vr, "batterij", "Ik heb (of wil) een batterij")
+    if vr.batterij:
+        getal(k2, vr, "batterij_kwh", "Hoe groot? (kWh)", 1.0, 1.0)
+        keuze(k3, vr, "strategie", "Waarvoor zet je de batterij in?", STRATEGIEEN)
+
+    st.markdown("**Auto en stroomcontract**")
+    k1, k2, k3 = st.columns(3, vertical_alignment="bottom")
+    schakelaar(k1, vr, "auto", "Ik laad thuis een elektrische auto")
+    if vr.auto:
+        getal(k2, vr, "km_per_jaar", "Hoeveel km per jaar?", 1000, 0)
+    keuze(k3, vr, "contract", "Wat voor stroomcontract?", CONTRACTEN)
+
+    st.divider()
+    lijst = wijzigingen(cfg, leid_af(vr, cfg))
+    gekozen = lijst
+    if not lijst:
+        st.success("Deze antwoorden passen al bij de huidige instellingen; er verandert niets.")
+    else:
+        st.warning(
+            f"**Toepassen overschrijft {len(lijst)} bestaande "
+            f"{'instelling' if len(lijst) == 1 else 'instellingen'}.** Hieronder staat welke, met de waarde van nu en de nieuwe "
+            "waarde. Haal het vinkje weg bij wat je wilt houden zoals het is."
+        )
+        tabel = pd.DataFrame(
+            {
+                "Overnemen": [True] * len(lijst),
+                "Instelling": [w.naam for w in lijst],
+                "Nu": [w.nu for w in lijst],
+                "Wordt": [w.wordt for w in lijst],
+            }
+        )
+        # De sleutel hangt af van de inhoud van de tabel. De editor onthoudt
+        # weggehaalde vinkjes per rijnummer; verandert een antwoord, dan staan
+        # er andere regels op die nummers en zou een vinkje bij de verkeerde
+        # instelling terechtkomen. Met een nieuwe sleutel begint de editor
+        # opnieuw met alles aangevinkt.
+        sleutel = hash(tuple((w.onderdeel, w.veld, w.wordt) for w in lijst))
+        bewerkt = st.data_editor(
+            tabel,
+            hide_index=True,
+            width="stretch",
+            disabled=["Instelling", "Nu", "Wordt"],
+            column_config={"Overnemen": st.column_config.CheckboxColumn("Overnemen", width="small")},
+            key=f"snelstart_keuze_{sleutel}",
+        )
+        gekozen = [w for w, aan in zip(lijst, bewerkt["Overnemen"]) if aan]
+
+    st.caption("Na **Toepassen** rekent de app meteen het jaar door en toont ze het tabblad Overzicht.")
+    k1, k2, _ = st.columns([1, 1, 2])
+    # De knop werkt ook als er niets verandert of alles is afgevinkt: dan
+    # blijft de instelling zoals ze is en volgt alleen de simulatie.
+    if k1.button("Toepassen", type="primary", width="stretch"):
+        st.session_state["cfg"] = pas_toe(cfg, gekozen)
+        # Een nieuwe generatie: alle invoervelden beginnen opnieuw, met de
+        # afgeleide waarden (zie de uitleg bovenaan dit bestand).
+        st.session_state["generatie"] += 1
+        # Het bestand blijft, anders dan bij "Standaardinstellingen", het
+        # huidige bestand: de snelstart is een bewerking van deze instelling
+        # en de gebruiker heeft elke wijziging gezien. De zijbalk meldt
+        # "gewijzigd, nog niet opgeslagen".
+        st.session_state["melding"] = (
+            f"Quick Start toegepast: {len(gekozen)} {'instelling' if len(gekozen) == 1 else 'instellingen'} aangepast "
+            "en het jaar is doorgerekend. Fijn afstellen kan op het tabblad Instellingen."
+        )
+        # Meteen rekenen en de uitkomst tonen: wie de snelstart gebruikt, wil
+        # een eerste antwoord en geen tabblad vol velden. ``main`` leest deze
+        # twee wensen in de volgende opbouw (zie daar).
+        st.session_state["simulatie_gevraagd"] = True
+        _toon_tabblad("Overzicht")
+        # Een volledige opbouw sluit het venster.
+        st.rerun()
+    if k2.button("Annuleren", width="stretch"):
+        st.rerun()
 
 
 def main() -> None:
@@ -1690,18 +2229,25 @@ def main() -> None:
     # hun standaardwaarde en laat alle bestaande waarden staan.
     cfg: Config = Config.uit_dict(dataclasses.asdict(st.session_state["cfg"]))
     st.session_state["cfg"] = cfg
+    # Een jaar waarvoor (nog) geen data bestaat, bijvoorbeeld uit een bestand
+    # van iemand anders: terug naar het laatste jaar dat er wel is. Hier en
+    # niet bij het keuzeveld, want dat veld staat in een blok dat dicht kan
+    # zijn.
+    if cfg.algemeen.jaar not in _jaren():
+        cfg.algemeen.jaar = _jaren()[-1]
+
+    # Moet er in deze opbouw gerekend worden? Drie plekken kunnen daarom
+    # vragen: de knop "Herbereken alles", Quick Start na "Toepassen" en het
+    # laden van een bestand. Ze zetten alle drie dezelfde wens in de sessie.
+    # Die wordt hier meteen weggehaald, zodat ze precies één opbouw geldt, ook
+    # als die opbouw verderop strandt (bijvoorbeeld op ontbrekende prijzen).
+    start = st.session_state.pop("simulatie_gevraagd", False)
+
+    st.html(_kopbalk_css())
 
     with st.sidebar:
         st.title("Batterijsimulatie")
         st.caption(f"Versie {VERSION}")
-        alg = cfg.algemeen
-        jaren = list(range(2019, dt.date.today().year))
-        if alg.jaar not in jaren:
-            alg.jaar = jaren[-1]
-        keuze(st, alg, "jaar", "Jaar (weer en prijzen)", {j: str(j) for j in jaren})
-        keuze(st, alg, "knmi_station", "KNMI-station", {nr: naam for nr, (naam, _, _) in KNMI_STATIONS.items()})
-        keuze(st, alg, "tijdstap_min", "Tijdstap", {m: f"{m} min" for m in TIJDSTAPPEN_MIN})
-        getal(st, alg, "seed", "Toevalsreeks", 1, 0)
         # De knoppen in de zijbalk hebben bewust GEEN uitleg achter de muis
         # (``help``): de ballon kwam bij elke beweging naar een knop op en zat
         # het klikken in de weg. De namen zeggen wat de knoppen doen; wat er
@@ -1709,10 +2255,20 @@ def main() -> None:
         # vraagtekens bij de invoervelden blijven: die verschijnen alleen op
         # het vraagteken zelf, niet op het veld.
         #
-        # Simulatie starten: rekent het hele jaar opnieuw door met de
-        # instellingen van dit moment. De tabbladen met uitkomsten waarschuwen
-        # als ze nog bij oude instellingen horen.
-        start = st.button("Simulatie starten", type="primary", width="stretch")
+        # De zijbalk bevat alleen nog knoppen. Jaar, station, tijdstap en
+        # toevalsreeks stonden hier eerst ook; dat zijn instellingen en ze
+        # staan nu bij de andere instellingen, in het blok Algemeen. De knop
+        # om te rekenen staat boven de tabbladen (zie ``_toon_herbereken``).
+        #
+        # Handleiding: toont README.md in een venster (zie ``handleiding_venster``).
+        if st.button("Handleiding", width="stretch"):
+            handleiding_venster()
+        # Quick Start: een venster met een paar gewone vragen waaruit de meeste
+        # instellingen worden afgeleid (zie ``snelstart_venster``). Het venster
+        # zelf opent verderop, na het tabblad Instellingen, om dezelfde reden
+        # als bij opslaan: pas dan staat in ``cfg`` wat er in deze run in de
+        # velden is ingevuld.
+        snelstart = st.button("Quick Start…", width="stretch")
 
         st.divider()
         # Laden en opslaan gaan via de vensters van Windows en werken op een
@@ -1753,7 +2309,18 @@ def main() -> None:
             st.rerun()
         meldingsplek = st.empty()
 
-    tabs = st.tabs(["Instellingen", "Overzicht", "Tijdverloop", "Fasen en load balancing", "Warmtepomp", "Scenario's"])
+    # De balk boven de tabbladen, met de knop "Herbereken alles". Hier krijgt
+    # ze alleen haar plek; gevuld wordt ze verderop, als bekend is of er iets
+    # te herberekenen valt (zie ``_toon_herbereken``).
+    kopbalk = st.container(key="kopbalk")
+
+    # Sleutel en begintabblad veranderen alleen als de app zelf een tabblad
+    # wil tonen (na Quick Start); zie ``_toon_tabblad``.
+    tabs = st.tabs(
+        TABBLADEN,
+        default=st.session_state.get("tabblad_begin", TABBLADEN[0]),
+        key=f"tabbladen_{st.session_state.get('tabblad_ronde', 0)}",
+    )
     with tabs[0]:
         # Het weer is hier alleen nodig om bij netcongestie het patroon te
         # tonen. Lukt het ophalen niet, dan werken de instellingen gewoon; de
@@ -1787,6 +2354,12 @@ def main() -> None:
         if pad is not None:
             _bewaar_in(cfg, pad)
 
+    # Het venster van Quick Start opent hier en niet bij de knop in de
+    # zijbalk; zie het commentaar bij de knop.
+    if snelstart:
+        _vergeet_snelstart()
+        snelstart_venster(cfg)
+
     # De regel met het bestand en de bevestiging of foutmelding, op de plekken
     # die de zijbalk ervoor heeft vrijgehouden.
     huidig = st.session_state.get("bestand")
@@ -1810,6 +2383,8 @@ def main() -> None:
             weer, prijzen = haal_data(cfg.algemeen.jaar, cfg.algemeen.knmi_station)
     except Exception as fout:  # noqa: BLE001 - elke netwerk- of datafout moet leesbaar op het scherm komen
         st.error(f"De data voor {cfg.algemeen.jaar} kon niet worden opgehaald: {fout}")
+        # Er is niet gerekend; de knop blijft klikbaar om het opnieuw te proberen.
+        _toon_herbereken(kopbalk, True)
         return
 
     # Handelt de batterij op de onbalansmarkt, dan zijn ook de onbalansprijzen
@@ -1821,6 +2396,7 @@ def main() -> None:
             onbalans = haal_onbalans(cfg.algemeen.jaar)
         except OnbalansOntbreekt as fout:
             st.error(str(fout))
+            _toon_herbereken(kopbalk, True)
             return
 
     if start or "uitkomst" not in st.session_state:
@@ -1831,6 +2407,9 @@ def main() -> None:
     uit: Uitkomst = st.session_state["uitkomst"]
     ref: Uitkomst = st.session_state["referentie"]
     verouderd = st.session_state["uitkomst_json"] != nu_json
+    # Pas nu de knop: na het rekenen, zodat ze meteen laat zien dat er niets
+    # meer te herberekenen valt.
+    _toon_herbereken(kopbalk, verouderd)
 
     for tab, toon in (
         (tabs[1], lambda: toon_overzicht(uit, ref)),
@@ -1840,10 +2419,10 @@ def main() -> None:
     ):
         with tab:
             if verouderd:
-                st.warning("De instellingen zijn gewijzigd sinds deze simulatie. Kies 'Simulatie starten' in de zijbalk.")
+                st.warning("De instellingen zijn gewijzigd sinds deze simulatie. Klik bovenaan op 'Herbereken alles'.")
             toon()
     with tabs[5]:
-        toon_scenarios(cfg, weer, prijzen)
+        toon_scenarios(uit, weer, prijzen, verouderd)
 
 
 main()
