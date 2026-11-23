@@ -1901,9 +1901,14 @@ div[data-testid="stLayoutWrapper"]:has(> .st-key-kopbalk) {
     background: {achtergrond};
 }
 /* Sub-tabbladen (binnen het Overzicht) plakken niet: ze zouden op dezelfde
-   hoogte komen als de hoofdtabbladen en die bedekken. */
+   hoogte komen als de hoofdtabbladen en die bedekken. Alle drie de
+   eigenschappen van de regel hierboven worden teruggezet, ook z-index: de
+   rij staat in een flex-container, en daar telt z-index ook zonder
+   position. Met de 100 van de hoofdtabbladen schoven de sub-tabbladen
+   zichtbaar over de vaste balk heen in plaats van eronderdoor. */
 .stTabs .stTabs [role="tablist"] {
     position: static;
+    z-index: auto;
     background: transparent;
 }
 </style>
