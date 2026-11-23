@@ -23,4 +23,4 @@ Opbouw (elke module heeft één onderwerp):
 
 # De codeversie staat alleen hier; de app toont haar in de zijbalk en
 # vergelijkt haar met de nieuwste release (zie ``versie``).
-VERSION = "0.4.0"
+VERSION = "0.4.1"
